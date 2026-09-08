@@ -1,3 +1,5 @@
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from services.api.app.main import app, get_market_reader
@@ -54,3 +56,16 @@ def test_market_live_endpoint_normalizes_symbol_list():
 
     assert response.status_code == 200
     assert response.json()[0]["symbol"] == "BTCUSDT"
+
+
+@pytest.mark.asyncio
+async def test_market_reader_does_not_fallback_to_service_role_key(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role-secret")
+
+    dependency = get_market_reader()
+    with pytest.raises(HTTPException) as exc_info:
+        await anext(dependency)
+
+    assert exc_info.value.status_code == 503
