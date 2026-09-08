@@ -9,31 +9,36 @@ from btc_core.scanner.scoring import OpportunityInputs
 from services.market_worker.app.main import run_realtime_cycle
 
 
+def make_candidate(symbol: str, timeframe: str) -> MarketScannerCandidate:
+    return MarketScannerCandidate(
+        rank=1,
+        symbol=symbol,
+        timeframe=timeframe,
+        direction=Direction.LONG,
+        opportunity_score=80,
+        directional_signal=0.5,
+        components=OpportunityInputs(
+            technical=80, momentum=80, volume=80, order_flow=80,
+            open_interest=80, funding=80, liquidity=80, news=50, macro=50, risk_reward=50,
+        ),
+        last_price=0.004 if symbol == "PUMPUSDT" else 62000,
+        quote_volume_24h=1_000_000,
+        funding_rate=0.0001,
+        open_interest_change_percent=1,
+        long_short_ratio=1,
+        spread_percent=0.01,
+    )
+
+
 class FakeScanner:
+    def __init__(self, symbol: str = "PUMPUSDT"):
+        self.symbol = symbol
+
     async def scan(self, *, timeframe: str, universe_limit: int, candidate_limit: int):
         return MarketScanResult(
             timeframe=timeframe,
             universe_size=2,
-            candidates=[
-                MarketScannerCandidate(
-                    rank=1,
-                    symbol="PUMPUSDT",
-                    timeframe=timeframe,
-                    direction=Direction.LONG,
-                    opportunity_score=80,
-                    directional_signal=0.5,
-                    components=OpportunityInputs(
-                        technical=80, momentum=80, volume=80, order_flow=80,
-                        open_interest=80, funding=80, liquidity=80, news=50, macro=50, risk_reward=50,
-                    ),
-                    last_price=0.004,
-                    quote_volume_24h=1_000_000,
-                    funding_rate=0.0001,
-                    open_interest_change_percent=1,
-                    long_short_ratio=1,
-                    spread_percent=0.01,
-                )
-            ],
+            candidates=[make_candidate(self.symbol, timeframe)],
             failures=[],
         )
 
@@ -56,8 +61,11 @@ class FakeRepo:
 
 
 class FakeRealtime:
+    def __init__(self, expected_symbols):
+        self.expected_symbols = expected_symbols
+
     async def events(self, symbols, timeframe, *, run_seconds):
-        assert symbols == ["PUMPUSDT", "BTCUSDT", "SOLUSDT", "XRPUSDT", "ETHUSDT"]
+        assert symbols == self.expected_symbols
         assert timeframe == "15m"
         yield RealtimeMarketEvent(
             kind="MARK_PRICE",
@@ -73,9 +81,9 @@ class FakeRealtime:
 async def test_run_realtime_cycle_tracks_core_symbols_beyond_scanner_quota():
     repo = FakeRepo()
     result = await run_realtime_cycle(
-        scanner=FakeScanner(),
+        scanner=FakeScanner("PUMPUSDT"),
         repo=repo,
-        realtime=FakeRealtime(),
+        realtime=FakeRealtime(["PUMPUSDT", "BTCUSDT", "SOLUSDT", "XRPUSDT", "ETHUSDT"]),
         timeframe="15m",
         universe_limit=30,
         candidate_limit=10,
@@ -89,3 +97,19 @@ async def test_run_realtime_cycle_tracks_core_symbols_beyond_scanner_quota():
     assert len(repo.states) == 1
     assert repo.states[0][0].symbol == "BTCUSDT"
     assert repo.states[0][0].mark_price == 62100
+
+
+@pytest.mark.asyncio
+async def test_run_realtime_cycle_deduplicates_core_symbol_already_in_scanner():
+    repo = FakeRepo()
+    await run_realtime_cycle(
+        scanner=FakeScanner("BTCUSDT"),
+        repo=repo,
+        realtime=FakeRealtime(["BTCUSDT", "SOLUSDT", "XRPUSDT", "ETHUSDT"]),
+        timeframe="15m",
+        universe_limit=30,
+        candidate_limit=10,
+        realtime_symbol_limit=5,
+        realtime_seconds=10,
+        flush_interval_seconds=2,
+    )
