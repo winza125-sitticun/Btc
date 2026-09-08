@@ -10,6 +10,9 @@ from btc_core.market.scanner import BinanceOpportunityScanner, MarketScanResult
 from btc_core.market.supabase_repo import SupabaseMarketRepository
 
 
+CORE_REALTIME_SYMBOLS = ("BTCUSDT", "SOLUSDT", "XRPUSDT", "ETHUSDT")
+
+
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     raw = os.getenv(name)
     value = default if raw is None else int(raw)
@@ -20,6 +23,14 @@ def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> 
     raw = os.getenv(name)
     value = default if raw is None else float(raw)
     return max(minimum, min(maximum, value))
+
+
+def _select_realtime_symbols(candidates, realtime_symbol_limit: int) -> list[str]:
+    symbols = [candidate.symbol for candidate in candidates[:realtime_symbol_limit]]
+    for symbol in CORE_REALTIME_SYMBOLS:
+        if symbol not in symbols:
+            symbols.append(symbol)
+    return symbols
 
 
 async def run_realtime_cycle(
@@ -41,7 +52,7 @@ async def run_realtime_cycle(
     )
     await repo.persist_scan(result)
 
-    symbols = [candidate.symbol for candidate in result.candidates[:realtime_symbol_limit]]
+    symbols = _select_realtime_symbols(result.candidates, realtime_symbol_limit)
     if not symbols:
         return result
 
