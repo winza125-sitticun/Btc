@@ -77,3 +77,13 @@ def test_flat_weak_market_returns_wait():
 
     assert result.direction is Direction.WAIT
     assert result.opportunity_score < 60
+
+
+def test_phase_5a_keeps_news_macro_and_rr_neutral():
+    result = build_market_feature_result(
+        _snapshot(rising=True, buy_ratio=0.72, funding=0.0001, oi_change=6.0)
+    )
+
+    assert result.inputs.news == 50.0
+    assert result.inputs.macro == 50.0
+    assert result.inputs.risk_reward == 50.0
