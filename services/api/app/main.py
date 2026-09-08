@@ -29,7 +29,7 @@ app.add_middleware(
 
 async def get_market_reader():
     url = os.getenv("SUPABASE_URL", "").strip()
-    key = (os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+    key = os.getenv("SUPABASE_ANON_KEY", "").strip()
     if not url or not key:
         raise HTTPException(status_code=503, detail="Market data repository is not configured")
     repo = SupabaseMarketRepository(supabase_url=url, api_key=key)
