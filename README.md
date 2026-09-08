@@ -16,6 +16,8 @@ Cloud-first AI-assisted crypto futures opportunity scanner and simulation platfo
 - `services/api` — FastAPI HTTP service for dashboard/settings APIs
 - `btc_core/ai` — structured AI provider/decision contracts
 - `btc_core/scanner` — deterministic opportunity scoring
+- `btc_core/market` — Binance USD-M public market adapter, feature builder, and scanner
+- `services/market_worker` — one-shot market scanner worker entry point
 - `btc_core/risk` — non-AI risk approval gate
 - `btc_core/simulation` — paper position accounting
 - `supabase/migrations` — PostgreSQL schema and RLS
@@ -35,8 +37,11 @@ Implemented foundation contracts for:
 7. Supabase foundation schema
 8. Mobile-first PWA dashboard/settings shell
 9. GitHub Actions CI
+10. Binance USD-M read-only market client (public endpoints only)
+11. Real-market snapshot assembly from candles, funding, OI, long/short ratio and bid/ask spread
+12. Market-only Opportunity Scanner with top-volume universe selection and bounded concurrency
 
-The next engineering milestone is Binance Futures market ingestion and scanner data adapters. Live orders remain out of scope until simulation and testnet gates are validated.
+The market scanner intentionally keeps News, Macro and Risk/Reward components neutral until the Intelligence and strategy-enrichment milestones. Live orders remain out of scope until simulation and testnet gates are validated.
 
 ## Run backend tests
 
@@ -63,9 +68,20 @@ npm run dev
 
 ## Database
 
-Apply `supabase/migrations/202609080001_v1_foundation.sql` to a Supabase project. User-owned tables use RLS. Secrets must be stored server-side; do not persist plaintext API keys in browser storage or ordinary public tables.
+Apply the migrations in `supabase/migrations/` in filename order to a Supabase project. User-owned tables use RLS. Secrets must be stored server-side; do not persist plaintext API keys in browser storage or ordinary public tables.
 
 ## Deployment
 
 - Backend: Railway using `railway.toml`
 - Frontend: build `apps/web` then deploy static assets with `wrangler.jsonc`
+
+## Run one market scan
+
+The scanner uses Binance public USD-M endpoints and does not require an API key.
+
+```bash
+SCANNER_TIMEFRAME=15m SCANNER_UNIVERSE_LIMIT=10 SCANNER_CANDIDATE_LIMIT=5 \
+  python -m services.market_worker.app.main
+```
+
+For the first deployment keep the universe small (10–30 symbols) while validating Railway rate limits and runtime behavior.
