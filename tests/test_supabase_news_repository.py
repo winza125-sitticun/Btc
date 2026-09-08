@@ -90,6 +90,19 @@ async def test_article_exists_and_recent_story_mapping():
 
 
 @pytest.mark.asyncio
+async def test_article_exists_false_for_empty_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    async with SupabaseNewsRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="secret",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        assert await repo.article_exists("https://example.com/missing") is False
+
+
+@pytest.mark.asyncio
 async def test_persist_article_upserts_article_and_assets_idempotently():
     calls: list[httpx.Request] = []
 
