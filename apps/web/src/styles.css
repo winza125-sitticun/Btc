@@ -47,3 +47,31 @@ input:disabled { color: #7f8aa6; }
   .candidate { grid-template-columns: 40px 1fr 62px; }
   .candidate > div:nth-last-child(2), .candidate > div:nth-last-child(1) { display: none; }
 }
+.scanner-controls { display: flex; align-items: center; gap: 9px; }
+.scanner-controls select { width: auto; min-width: 88px; }
+.status { display: inline-flex; align-items: center; min-height: 34px; padding: 0 10px; border-radius: 999px; font-size: .72rem; font-weight: 800; letter-spacing: .05em; }
+.status.online { color: #a9e6c7; background: #123526; border: 1px solid #2d6a4e; }
+.status.error { color: #efb6b6; background: #351a20; border: 1px solid #70404a; }
+.signal { width: fit-content; font-size: .74rem; font-weight: 800; letter-spacing: .04em; }
+.signal.long { color: #77d9ad; }
+.signal.short { color: #f09a9a; }
+.signal.wait, .signal.exit { color: #e0c884; }
+.error-box { margin: 0 0 12px; padding: 10px 12px; border: 1px solid #70404a; border-radius: 10px; color: #efb6b6; background: #24151a; font-size: .84rem; overflow-wrap: anywhere; }
+.empty-state { padding: 24px 8px; color: #8f9cbc; text-align: center; }
+.scanner-footnote { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid #202e4c; color: #7886a7; font-size: .75rem; }
+.detail-grid { margin-top: 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.detail-card { padding: 13px; border-radius: 12px; background: #0d1426; border: 1px solid #202e4c; }
+.detail-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+dl { margin: 0; display: grid; gap: 7px; }
+dl div { display: flex; justify-content: space-between; gap: 12px; }
+dt { color: #8f9cbc; font-size: .78rem; }
+dd { margin: 0; font-size: .82rem; font-weight: 700; }
+@media (max-width: 850px) {
+  .detail-grid { grid-template-columns: 1fr 1fr; }
+  .candidate { grid-template-columns: 40px minmax(100px, 1fr) repeat(2, minmax(65px, auto)); }
+  .candidate > div:nth-last-child(2), .candidate > div:nth-last-child(1) { display: none; }
+}
+@media (max-width: 560px) {
+  .scanner-title { align-items: flex-start; flex-direction: column; }
+  .detail-grid { grid-template-columns: 1fr; }
+}
