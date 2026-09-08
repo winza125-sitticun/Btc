@@ -17,7 +17,7 @@ class FakeScanner:
             candidates=[
                 MarketScannerCandidate(
                     rank=1,
-                    symbol="BTCUSDT",
+                    symbol="PUMPUSDT",
                     timeframe=timeframe,
                     direction=Direction.LONG,
                     opportunity_score=80,
@@ -26,7 +26,7 @@ class FakeScanner:
                         technical=80, momentum=80, volume=80, order_flow=80,
                         open_interest=80, funding=80, liquidity=80, news=50, macro=50, risk_reward=50,
                     ),
-                    last_price=62000,
+                    last_price=0.004,
                     quote_volume_24h=1_000_000,
                     funding_rate=0.0001,
                     open_interest_change_percent=1,
@@ -57,7 +57,7 @@ class FakeRepo:
 
 class FakeRealtime:
     async def events(self, symbols, timeframe, *, run_seconds):
-        assert symbols == ["BTCUSDT"]
+        assert symbols == ["PUMPUSDT", "BTCUSDT", "SOLUSDT", "XRPUSDT", "ETHUSDT"]
         assert timeframe == "15m"
         yield RealtimeMarketEvent(
             kind="MARK_PRICE",
@@ -70,7 +70,7 @@ class FakeRealtime:
 
 
 @pytest.mark.asyncio
-async def test_run_realtime_cycle_persists_scan_and_final_live_state():
+async def test_run_realtime_cycle_tracks_core_symbols_beyond_scanner_quota():
     repo = FakeRepo()
     result = await run_realtime_cycle(
         scanner=FakeScanner(),
@@ -84,7 +84,7 @@ async def test_run_realtime_cycle_persists_scan_and_final_live_state():
         flush_interval_seconds=2,
     )
 
-    assert result.candidates[0].symbol == "BTCUSDT"
+    assert result.candidates[0].symbol == "PUMPUSDT"
     assert len(repo.scans) == 1
     assert len(repo.states) == 1
     assert repo.states[0][0].symbol == "BTCUSDT"
