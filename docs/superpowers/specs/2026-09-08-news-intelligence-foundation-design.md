@@ -84,6 +84,8 @@ V1 begins with a small, high-signal source set rather than a large uncontrolled 
 
 The implementation must model sources as configuration records/adapters rather than hard-code source-specific parsing into the worker loop. Sources may be disabled individually if their feed becomes unavailable or changes format.
 
+If a listed source no longer exposes a stable public RSS/Atom endpoint during implementation, it is disabled rather than replaced with brittle page scraping. Phase 5A production validation requires successful ingestion from at least four distinct verified sources; adding a replacement source requires the same adapter and test coverage.
+
 Solana Foundation, Ripple/XRPL, additional exchanges, security firms, and other crypto publications may be added only after their public feed/API is verified and covered by source-specific tests.
 
 ## Architecture
@@ -104,10 +106,13 @@ Normalizer
   | published time
         |
         v
-Exact + Near-Duplicate Resolver
+Exact Duplicate Resolver
         |
         v
 Asset Tagger
+        |
+        v
+Near-Duplicate / Story Resolver
         |
         v
 Deterministic Metadata Scorer
@@ -176,16 +181,16 @@ The normalized canonical URL is stored in `news_articles.source_url` and continu
 Provides two deterministic duplicate layers.
 
 #### Exact duplicate
-Articles with the same canonical URL are treated as the same source article. Persistence must be idempotent across repeated polling.
+Articles with the same canonical URL are treated as the same source article. Exact duplicate resolution occurs immediately after normalization. Persistence must be idempotent across repeated polling.
 
 #### Cross-source near duplicate
-Different publishers may report the same event with different URLs. V1 must assign a deterministic `content_fingerprint` used as a story-group identifier.
+Different publishers may report the same event with different URLs. Near-duplicate resolution happens after asset tagging so recent comparison can be bounded by shared asset context. V1 assigns a deterministic `content_fingerprint` used as a story-group identifier.
 
 Algorithm:
 1. normalize title to lowercase Unicode text;
 2. remove punctuation, repeated whitespace, common stopwords, and publisher suffixes;
 3. tokenize the remaining title;
-4. compare against recent articles within a bounded time window, primarily articles sharing at least one asset tag;
+4. compare against recent articles within a bounded time window, prioritizing articles sharing at least one asset tag; articles with no asset tags compare only within the same source class/category context;
 5. use deterministic token-set similarity (Jaccard) with a documented threshold;
 6. if a recent article exceeds the threshold, reuse its `content_fingerprint`;
 7. otherwise create a new SHA-256 fingerprint from the normalized title representation.
@@ -195,6 +200,7 @@ This grouping does not delete source provenance. Each distinct source URL remain
 Initial limits:
 - comparison window: 24 hours;
 - similarity threshold: 0.82;
+- maximum recent comparison candidates per incoming article: 100;
 - only bounded recent records are queried so ingestion cost does not grow with total history.
 
 ### `btc_core.news.tagging`
@@ -263,8 +269,8 @@ Responsibilities:
 1. load source catalog and environment configuration;
 2. poll enabled feeds concurrently with a safe concurrency limit;
 3. isolate source failures;
-4. normalize, deduplicate, tag, score, and persist accepted articles;
-5. log per-cycle counts: sources successful/failed, entries parsed, inserted, duplicates, malformed entries;
+4. normalize, exact-deduplicate, tag, story-resolve, score, and persist accepted articles;
+5. log per-cycle counts: sources successful/failed, entries parsed, inserted, exact duplicates, grouped near-duplicates, malformed entries;
 6. sleep until the next poll cycle.
 
 Default polling interval: 120 seconds.
@@ -285,7 +291,7 @@ index news_articles(content_fingerprint, published_at desc)
 index news_assets(symbol, news_id)
 ```
 
-`content_fingerprint` is intentionally non-unique because multiple source articles may represent one story.
+`content_fingerprint` is intentionally non-unique because multiple source articles may represent one story. The migration may leave the column nullable for compatibility with pre-existing rows, but all new Phase 5A worker inserts must populate it.
 
 The existing `news_articles.source_url UNIQUE` constraint remains the exact-idempotency boundary.
 
@@ -298,8 +304,8 @@ Railway `news-worker` requires only server-side runtime configuration:
 APP_ENV=production
 TRADING_MODE=SIMULATION
 DIRECT_AI_ORDER_ENABLED=false
-SUPABASE_URL=<existing BTC-Trader project URL>
-SUPABASE_SERVICE_ROLE_KEY=<server secret configured directly in Railway>
+SUPABASE_URL=https://ypitothwjbdmbvdmftfv.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=(configured directly in Railway; never committed or pasted into chat)
 NEWS_POLL_SECONDS=120
 NEWS_HTTP_TIMEOUT_SECONDS=10
 NEWS_FETCH_CONCURRENCY=4
@@ -331,7 +337,7 @@ Articles keep their original `published_at`. Later consumers must reason from ag
 Repeated feed entries must not create duplicate source rows because canonical `source_url` is unique and persistence is idempotent.
 
 ## Data flow example
-A CFTC enforcement RSS item mentioning a crypto exchange and Bitcoin is fetched. The parser emits a raw entry. Normalization removes tracking parameters and converts publication time to UTC. The tagger finds `Bitcoin` and emits `BTCUSDT`. The source class gives the article regulator-level credibility. Enforcement keywords may make impact `HIGH`. The repository inserts one `news_articles` row plus a `news_assets` row for `BTCUSDT`. A later CoinDesk story about the same enforcement action keeps its own URL/source row but may share the same `content_fingerprint` if the deterministic similarity threshold is met.
+A CFTC enforcement RSS item mentioning a crypto exchange and Bitcoin is fetched. The parser emits a raw entry. Normalization removes tracking parameters and converts publication time to UTC. Exact deduplication checks the canonical URL. The tagger finds `Bitcoin` and emits `BTCUSDT`. Story resolution compares the title with bounded recent BTC-tagged articles. The source class gives the article regulator-level credibility. Enforcement keywords may make impact `HIGH`. The repository inserts one `news_articles` row plus a `news_assets` row for `BTCUSDT`. A later CoinDesk story about the same enforcement action keeps its own URL/source row but may share the same `content_fingerprint` if the deterministic similarity threshold is met.
 
 None of those records changes the active scanner score in Phase 5A.
 
@@ -371,10 +377,10 @@ No production code is committed directly to `main`.
 ## Production verification
 Phase 5A is complete only when all of the following are verified after merge:
 - `news-worker` is active on Railway;
-- multiple configured sources have produced stored articles;
+- at least four distinct verified configured sources have produced stored articles;
 - repeated polling does not duplicate identical source URLs;
-- `content_fingerprint` groups at least controlled/tested near-duplicate cases correctly;
-- BTC/SOL/XRP/ETH tagging is observable in `news_assets` where relevant articles exist;
+- `content_fingerprint` groups controlled/tested near-duplicate cases correctly;
+- BTC/SOL/XRP/ETH tagging is observable in `news_assets` when relevant articles exist, with fixtures proving all four aliases even if live feeds do not mention every asset during the deployment window;
 - one intentionally unavailable/mocked failure path is proven isolated in tests;
 - timestamps and source provenance are preserved;
 - scanner production behavior remains market-only with neutral `news=50.0` and `macro=50.0`;
