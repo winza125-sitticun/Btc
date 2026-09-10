@@ -96,10 +96,9 @@ class GeminiProviderClient:
         snapshot: AIAnalysisSnapshot,
         *,
         include_schema: bool = True,
+        include_response_format: bool = True,
     ) -> dict[str, Any]:
-        response_text: dict[str, Any] = {"mimeType": "application/json"}
         if include_schema:
-            response_text["schema"] = _normalize_gemini_json_schema(AIDecision.model_json_schema())
             output_instruction = "Return one JSON object matching the response schema. "
         else:
             output_instruction = (
@@ -107,7 +106,7 @@ class GeminiProviderClient:
                 "entry_min, entry_max, stop_loss, take_profits, risk_reward, and reason_summary. "
             )
 
-        return {
+        payload: dict[str, Any] = {
             "contents": [
                 {
                     "role": "user",
@@ -123,12 +122,19 @@ class GeminiProviderClient:
                     ],
                 }
             ],
-            "generationConfig": {
-                "responseFormat": {
-                    "text": response_text,
-                }
-            },
         }
+        if not include_response_format:
+            return payload
+
+        response_text: dict[str, Any] = {"mimeType": "application/json"}
+        if include_schema:
+            response_text["schema"] = _normalize_gemini_json_schema(AIDecision.model_json_schema())
+        payload["generationConfig"] = {
+            "responseFormat": {
+                "text": response_text,
+            }
+        }
+        return payload
 
     def _parse_response(self, response: httpx.Response) -> AIDecision:
         try:
@@ -153,6 +159,10 @@ class GeminiProviderClient:
         except ValidationError as exc:
             raise AIProviderError("Gemini decision failed schema validation", code="INVALID_SCHEMA") from exc
 
+    @staticmethod
+    def _is_bad_request(exc: AIProviderError) -> bool:
+        return exc.code == "INVALID_CONFIG" and exc.status_code == 400
+
     async def analyze(self, snapshot: AIAnalysisSnapshot) -> AIDecision:
         path = f"models/{self.config.model}:generateContent"
         try:
@@ -163,14 +173,29 @@ class GeminiProviderClient:
                 max_retries=self.config.max_retries,
                 json=self._request_payload(snapshot),
             )
-        except AIProviderError as exc:
-            if exc.code != "INVALID_CONFIG" or exc.status_code != 400:
+        except AIProviderError as structured_exc:
+            if not self._is_bad_request(structured_exc):
                 raise
-            response = await request_with_retry(
-                self._client,
-                "POST",
-                path,
-                max_retries=self.config.max_retries,
-                json=self._request_payload(snapshot, include_schema=False),
-            )
+            try:
+                response = await request_with_retry(
+                    self._client,
+                    "POST",
+                    path,
+                    max_retries=self.config.max_retries,
+                    json=self._request_payload(snapshot, include_schema=False),
+                )
+            except AIProviderError as mime_exc:
+                if not self._is_bad_request(mime_exc):
+                    raise
+                response = await request_with_retry(
+                    self._client,
+                    "POST",
+                    path,
+                    max_retries=self.config.max_retries,
+                    json=self._request_payload(
+                        snapshot,
+                        include_schema=False,
+                        include_response_format=False,
+                    ),
+                )
         return self._parse_response(response)
