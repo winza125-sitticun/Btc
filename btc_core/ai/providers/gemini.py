@@ -152,11 +152,57 @@ class GeminiProviderClient:
         }
         return payload
 
+    def _interaction_schema(self) -> dict[str, Any]:
+        schema = _normalize_gemini_json_schema(AIDecision.model_json_schema())
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            properties.pop("provider", None)
+            properties.pop("model", None)
+        required = schema.get("required")
+        if isinstance(required, list):
+            schema["required"] = [
+                item for item in required if item not in {"provider", "model"}
+            ]
+        return schema
+
+    def _interaction_payload(self, snapshot: AIAnalysisSnapshot) -> dict[str, Any]:
+        return {
+            "model": self.config.model,
+            "store": False,
+            "input": (
+                "Analyze this bounded crypto futures snapshot. "
+                "Return exactly one JSON object matching the response schema. "
+                "Direction must be LONG, SHORT, or WAIT; never claim an order was executed.\n"
+                + snapshot.model_dump_json()
+            ),
+            "generation_config": {"thinking_level": "low"},
+            "response_format": {
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": self._interaction_schema(),
+            },
+        }
+
+    def _validate_decision_data(self, data: Any) -> AIDecision:
+        if not isinstance(data, dict):
+            raise AIProviderError("Gemini JSON content must be an object", code="INVALID_SCHEMA")
+        normalized = dict(data)
+        normalized["provider"] = self.config.provider.value
+        normalized["model"] = self.config.model
+        try:
+            return AIDecision.model_validate(normalized)
+        except ValidationError as exc:
+            raise AIProviderError("Gemini decision failed schema validation", code="INVALID_SCHEMA") from exc
+
     def _parse_response(self, response: httpx.Response) -> AIDecision:
         try:
             envelope = response.json()
             parts = envelope["candidates"][0]["content"]["parts"]
-            text_parts = [item["text"] for item in parts if isinstance(item, dict) and isinstance(item.get("text"), str)]
+            text_parts = [
+                item["text"]
+                for item in parts
+                if isinstance(item, dict) and isinstance(item.get("text"), str)
+            ]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise AIProviderError("Gemini response did not contain usable text", code="INVALID_SCHEMA") from exc
         if len(text_parts) != 1 or not text_parts[0].strip():
@@ -165,36 +211,49 @@ class GeminiProviderClient:
             data = _decode_gemini_json_text(text_parts[0])
         except ValueError as exc:
             raise AIProviderError("Gemini returned invalid JSON content", code="INVALID_JSON") from exc
-        if not isinstance(data, dict):
-            raise AIProviderError("Gemini JSON content must be an object", code="INVALID_SCHEMA")
-        data = dict(data)
-        data["provider"] = self.config.provider.value
-        data["model"] = self.config.model
+        return self._validate_decision_data(data)
+
+    def _parse_interaction_response(self, response: httpx.Response) -> AIDecision:
         try:
-            return AIDecision.model_validate(data)
-        except ValidationError as exc:
-            raise AIProviderError("Gemini decision failed schema validation", code="INVALID_SCHEMA") from exc
+            envelope = response.json()
+            steps = envelope["steps"]
+            text_parts = [
+                item["text"]
+                for step in steps
+                if isinstance(step, dict) and step.get("type") == "model_output"
+                for item in step.get("content", [])
+                if isinstance(item, dict)
+                and item.get("type") == "text"
+                and isinstance(item.get("text"), str)
+            ]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise AIProviderError("Gemini interaction did not contain usable output", code="INVALID_SCHEMA") from exc
+        if envelope.get("status") != "completed":
+            raise AIProviderError("Gemini interaction did not complete", code="INVALID_SCHEMA")
+        if len(text_parts) != 1 or not text_parts[0].strip():
+            raise AIProviderError("Gemini interaction must contain one JSON text output", code="INVALID_SCHEMA")
+        try:
+            data = _decode_gemini_json_text(text_parts[0])
+        except ValueError as exc:
+            raise AIProviderError("Gemini interaction returned invalid JSON content", code="INVALID_JSON") from exc
+        return self._validate_decision_data(data)
 
     @staticmethod
     def _is_bad_request(exc: AIProviderError) -> bool:
         return exc.code == "INVALID_CONFIG" and exc.status_code == 400
 
     async def analyze(self, snapshot: AIAnalysisSnapshot) -> AIDecision:
-        path = f"models/{self.config.model}:generateContent"
         if self.config.model.startswith("gemini-3.8-"):
             response = await request_with_retry(
                 self._client,
                 "POST",
-                path,
+                "interactions",
                 max_retries=self.config.max_retries,
-                json=self._request_payload(
-                    snapshot,
-                    include_schema=False,
-                    include_response_format=False,
-                ),
+                json=self._interaction_payload(snapshot),
             )
-            return self._parse_response(response)
+            return self._parse_interaction_response(response)
 
+        path = f"models/{self.config.model}:generateContent"
         try:
             response = await request_with_retry(
                 self._client,
