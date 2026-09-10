@@ -27,6 +27,44 @@ export type LiveMarketState = {
   updated_at?: string | null
 }
 
+export type AIAnalysis = {
+  scanner_candidate_id: number
+  run_id: string
+  symbol: string
+  timeframe: string
+  provider: string
+  model: string
+  scanner_direction: 'LONG' | 'SHORT' | 'WAIT' | 'EXIT'
+  ai_direction: 'LONG' | 'SHORT' | 'WAIT' | 'EXIT' | null
+  confidence: number | null
+  entry_min: number | null
+  entry_max: number | null
+  stop_loss: number | null
+  take_profits: number[]
+  risk_reward: number | null
+  reason_summary: string | null
+  status: 'SUCCESS' | 'SKIPPED' | 'FAILED' | 'INVALID_RESPONSE'
+  risk_precheck_status: string | null
+  risk_precheck_reasons: string[]
+  latency_ms: number | null
+  attempt_count: number
+  error_code: string | null
+  created_at: string
+  completed_at: string | null
+}
+
+export type PublicConfig = {
+  trading_mode: 'SIMULATION' | 'TESTNET' | 'LIVE'
+  direct_ai_order_enabled: boolean
+  min_confidence: number
+  min_opportunity_score: number
+  max_leverage: number
+  ai_analysis_enabled: boolean
+  ai_provider: string | null
+  ai_model: string | null
+  ai_api_key_configured: boolean
+}
+
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 
 async function getJson<T>(path: string): Promise<T> {
@@ -47,4 +85,13 @@ export function fetchLiveStates(symbols: string[]) {
   if (symbols.length === 0) return Promise.resolve([] as LiveMarketState[])
   const params = new URLSearchParams({ symbols: symbols.join(',') })
   return getJson<LiveMarketState[]>(`/api/v1/market/live?${params}`)
+}
+
+export function fetchLatestAIAnalyses(timeframe: string, limit = 10) {
+  const params = new URLSearchParams({ timeframe, limit: String(limit) })
+  return getJson<AIAnalysis[]>(`/api/v1/ai/latest?${params}`)
+}
+
+export function fetchPublicConfig() {
+  return getJson<PublicConfig>('/api/v1/config/public')
 }
