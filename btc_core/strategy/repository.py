@@ -13,10 +13,14 @@ class StrategyRepositoryError(RuntimeError):
     pass
 
 class PublicBinanceKlinesFetcher:
-    """Explicit adapter boundary for public Binance klines only."""
-    is_public_binance_klines = True
-    def __init__(self, fetch: Callable[..., Awaitable[list[OHLCBar]]]): self._fetch = fetch
-    async def __call__(self, symbol, timeframe, start, end, limit): return await self._fetch(symbol, timeframe, start, end, limit)
+    """Concrete, credential-free adapter for the public Binance USD-M API."""
+    def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None):
+        self._client = httpx.AsyncClient(base_url="https://fapi.binance.com", transport=transport, timeout=10.0)
+    async def __call__(self, symbol, timeframe, start, end, limit):
+        response = await self._client.get("/fapi/v1/klines", params={"symbol": symbol, "interval": timeframe, "startTime": int(start.timestamp()*1000), "endTime": int(end.timestamp()*1000), "limit": limit})
+        response.raise_for_status()
+        return [OHLCBar(timestamp=datetime.fromtimestamp(row[0]/1000, tz=start.tzinfo), open=row[1], high=row[2], low=row[3], close=row[4]) for row in response.json()]
+    async def aclose(self): await self._client.aclose()
 
 
 class SupabaseStrategyRepository:
@@ -55,10 +59,8 @@ class SupabaseStrategyRepository:
 
     async def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, public_binance_klines: PublicBinanceKlinesFetcher | None = None, fallback: Callable[[str, str, datetime, datetime, int], Awaitable[list[OHLCBar]]] | None = None) -> list[OHLCBar]:
         if fallback is not None:
-            if public_binance_klines is not None: raise ValueError("use public_binance_klines, not fallback")
-            if not getattr(fallback, "is_public_binance_klines", False): raise ValueError("fallback must be a public_binance klines callback")
-            public_binance_klines = fallback
-        if public_binance_klines is not None and not getattr(public_binance_klines, "is_public_binance_klines", False):
+            raise ValueError("fallback callbacks are not supported; use public_binance_klines")
+        if public_binance_klines is not None and not isinstance(public_binance_klines, PublicBinanceKlinesFetcher):
             raise ValueError("public_binance_klines must be an approved public adapter")
         rows = await self.persisted_candles(symbol, timeframe, start, end)
         interval = _interval_minutes(timeframe)

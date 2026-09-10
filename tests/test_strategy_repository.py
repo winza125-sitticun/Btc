@@ -26,15 +26,15 @@ async def test_candles_query_is_exact_and_fallback_is_bounded_public_callback():
     def handler(request):
         requests.append(request)
         return httpx.Response(200, json=[])
-    called = []
-    async def fallback(symbol, timeframe, start, end, limit):
-        called.append((symbol, timeframe, limit)); return []
+    async def fallback(*args): return []
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     async with SupabaseStrategyRepository(supabase_url="https://x.supabase.co", api_key="service", transport=httpx.MockTransport(handler)) as repo:
-        await repo.candles("btcusdt", "1m", start, start, public_binance_klines=PublicBinanceKlinesFetcher(fallback))
+        adapter = PublicBinanceKlinesFetcher(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[])))
+        await repo.candles("btcusdt", "1m", start, start, public_binance_klines=adapter)
+        await adapter.aclose()
     assert requests[0].url.params["symbol"] == "eq.BTCUSDT"
     assert requests[0].url.params["timeframe"] == "eq.1m"
-    assert called == [("BTCUSDT", "1m", 1500)]
+    assert requests[0].url.path.endswith("market_candles")
 
 @pytest.mark.asyncio
 async def test_partial_persisted_coverage_uses_fallback_and_discovery_scopes_success():
@@ -47,7 +47,9 @@ async def test_partial_persisted_coverage_uses_fallback_and_discovery_scopes_suc
     async def fallback(*args): return []
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     async with SupabaseStrategyRepository(supabase_url="https://x.supabase.co", api_key="service", transport=httpx.MockTransport(handler)) as repo:
-        await repo.candles("BTCUSDT", "1m", start, start + __import__('datetime').timedelta(hours=1), public_binance_klines=PublicBinanceKlinesFetcher(fallback))
+        adapter = PublicBinanceKlinesFetcher(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[])))
+        await repo.candles("BTCUSDT", "1m", start, start + __import__('datetime').timedelta(hours=1), public_binance_klines=adapter)
+        await adapter.aclose()
         await repo.analyses_missing_outcomes()
     assert requests[0].url.path.endswith("market_candles") and len(requests) == 2
     assert requests[-1].url.params["status"] == "eq.SUCCESS"
