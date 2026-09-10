@@ -16,17 +16,22 @@ class AIProviderRuntimeConfig(BaseModel):
     provider: AIProvider
     model: str = Field(min_length=1, max_length=120)
     api_key: str = Field(min_length=1, repr=False)
-    base_url: str = Field(min_length=8, max_length=500)
+    base_url: str = Field(default="", max_length=500)
     timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     max_retries: int = Field(default=1, ge=0, le=1)
 
-    @field_validator("model", "api_key", "base_url")
+    @field_validator("model", "api_key")
     @classmethod
-    def strip_text(cls, value: str) -> str:
+    def strip_required_text(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
             raise ValueError("value must not be blank")
         return stripped
+
+    @field_validator("base_url")
+    @classmethod
+    def strip_base_url(cls, value: str) -> str:
+        return value.strip()
 
 
 class AIProviderError(RuntimeError):
