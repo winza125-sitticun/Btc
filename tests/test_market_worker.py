@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from btc_core.ai.models import Direction
 from btc_core.market.realtime import RealtimeMarketEvent
 from btc_core.market.scanner import MarketScanResult, MarketScannerCandidate
+from btc_core.market.supabase_repo import PersistedCandidateRef, PersistedScanRef
 from btc_core.scanner.scoring import OpportunityInputs
 from services.market_worker.app.main import _env_flag, run_realtime_cycle
 
@@ -51,7 +53,11 @@ class FakeRepo:
 
     async def persist_scan(self, result):
         self.scans.append(result)
-        return "run-id"
+        item = result.candidates[0]
+        return PersistedScanRef(
+            run_id="run-id",
+            candidates=(PersistedCandidateRef(id=1, rank=item.rank, symbol=item.symbol),),
+        )
 
     async def upsert_live_states(self, states):
         self.states.append(states)
@@ -87,6 +93,11 @@ def test_news_enrichment_feature_flag_defaults_off(monkeypatch):
 
     monkeypatch.setenv("NEWS_ENRICHMENT_V1_ENABLED", "false")
     assert _env_flag("NEWS_ENRICHMENT_V1_ENABLED", False) is False
+
+
+def test_ai_analysis_feature_flag_defaults_off(monkeypatch):
+    monkeypatch.delenv("AI_ANALYSIS_V1_ENABLED", raising=False)
+    assert _env_flag("AI_ANALYSIS_V1_ENABLED", False) is False
 
 
 @pytest.mark.asyncio
@@ -125,3 +136,67 @@ async def test_run_realtime_cycle_deduplicates_core_symbol_already_in_scanner():
         realtime_seconds=10,
         flush_interval_seconds=2,
     )
+
+
+@pytest.mark.asyncio
+async def test_realtime_starts_without_waiting_for_ai_analysis():
+    ai_started = asyncio.Event()
+    allow_ai_finish = asyncio.Event()
+    realtime_started = asyncio.Event()
+
+    class SlowAIRunner:
+        async def analyze_scan(self, result, persisted_scan):
+            ai_started.set()
+            await allow_ai_finish.wait()
+
+    class ObservableRealtime:
+        async def events(self, symbols, timeframe, *, run_seconds):
+            realtime_started.set()
+            if False:
+                yield None
+
+    task = asyncio.create_task(
+        run_realtime_cycle(
+            scanner=FakeScanner("BTCUSDT"),
+            repo=FakeRepo(),
+            realtime=ObservableRealtime(),
+            timeframe="15m",
+            universe_limit=30,
+            candidate_limit=10,
+            realtime_symbol_limit=5,
+            realtime_seconds=10,
+            flush_interval_seconds=2,
+            ai_runner=SlowAIRunner(),
+        )
+    )
+    await asyncio.wait_for(ai_started.wait(), timeout=0.2)
+    await asyncio.wait_for(realtime_started.wait(), timeout=0.2)
+    assert not task.done()
+    allow_ai_finish.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_ai_runner_failure_does_not_fail_realtime_cycle():
+    class FailingAIRunner:
+        async def analyze_scan(self, result, persisted_scan):
+            raise RuntimeError("AI failed")
+
+    class EmptyRealtime:
+        async def events(self, symbols, timeframe, *, run_seconds):
+            if False:
+                yield None
+
+    result = await run_realtime_cycle(
+        scanner=FakeScanner("BTCUSDT"),
+        repo=FakeRepo(),
+        realtime=EmptyRealtime(),
+        timeframe="15m",
+        universe_limit=30,
+        candidate_limit=10,
+        realtime_symbol_limit=5,
+        realtime_seconds=10,
+        flush_interval_seconds=2,
+        ai_runner=FailingAIRunner(),
+    )
+    assert result.candidates[0].symbol == "BTCUSDT"
