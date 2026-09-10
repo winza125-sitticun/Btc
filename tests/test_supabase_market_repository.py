@@ -6,7 +6,7 @@ import pytest
 from btc_core.ai.models import Direction
 from btc_core.market.realtime import LiveMarketState
 from btc_core.market.scanner import MarketScanResult, MarketScannerCandidate
-from btc_core.market.supabase_repo import SupabaseMarketRepository
+from btc_core.market.supabase_repo import PersistedScanRef, SupabaseMarketRepository
 from btc_core.scanner.scoring import OpportunityInputs
 
 
@@ -19,7 +19,7 @@ async def test_persist_scan_creates_system_run_and_candidates():
         if request.url.path.endswith("/market_scanner_runs"):
             return httpx.Response(201, json=[{"id": "11111111-1111-1111-1111-111111111111"}])
         if request.url.path.endswith("/market_scanner_candidates"):
-            return httpx.Response(201, json=[])
+            return httpx.Response(201, json=[{"id": 77, "rank": 1, "symbol": "BTCUSDT"}])
         return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
@@ -48,13 +48,16 @@ async def test_persist_scan_creates_system_run_and_candidates():
     )
     result = MarketScanResult(timeframe="15m", universe_size=30, candidates=[candidate], failures=[])
 
-    run_id = await repo.persist_scan(result)
+    persisted = await repo.persist_scan(result)
     await repo.aclose()
 
-    assert run_id == "11111111-1111-1111-1111-111111111111"
+    assert isinstance(persisted, PersistedScanRef)
+    assert persisted.run_id == "11111111-1111-1111-1111-111111111111"
+    assert persisted.candidates[0].id == 77
     assert requests[0].headers["authorization"] == "Bearer service-key"
     assert requests[0].url.path.endswith("/rest/v1/market_scanner_runs")
     assert requests[1].url.path.endswith("/rest/v1/market_scanner_candidates")
+    assert requests[1].headers["prefer"] == "return=representation"
     assert b'"symbol":"BTCUSDT"' in requests[1].content
 
 
