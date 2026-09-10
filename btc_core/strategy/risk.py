@@ -32,8 +32,29 @@ class PositionSize:
 
 
 def _positive(value: float, name: str) -> None:
-    if not isfinite(value) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be positive")
+
+
+def _context_is_valid(context: FullRiskContext) -> bool:
+    numeric = (
+        context.confidence,
+        context.opportunity_score,
+        context.risk_reward,
+        context.requested_leverage,
+        context.daily_realized_loss_percent,
+        context.balance,
+        context.equity,
+    )
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) for value in numeric):
+        return False
+    if not (0 <= context.confidence <= 100 and 0 <= context.opportunity_score <= 100):
+        return False
+    if context.risk_reward <= 0 or context.requested_leverage <= 0 or context.daily_realized_loss_percent < 0:
+        return False
+    if not isinstance(context.open_positions, int) or isinstance(context.open_positions, bool) or context.open_positions < 0:
+        return False
+    return context.balance > 0 and context.equity > 0
 
 
 def evaluate_full_risk(
@@ -44,6 +65,8 @@ def evaluate_full_risk(
 ) -> RiskDecision:
     """Evaluate all account, market, event, and policy guards in simulation."""
     reasons: list[str] = []
+    if not _context_is_valid(context):
+        return RiskDecision(approved=False, reasons=("risk_context_invalid",))
     if context.confidence < policy.min_confidence:
         reasons.append("confidence_below_minimum")
     if context.opportunity_score < policy.min_opportunity_score:

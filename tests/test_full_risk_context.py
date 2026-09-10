@@ -1,3 +1,4 @@
+import math
 import pytest
 
 from btc_core.risk.engine import RiskDecision, RiskPolicy
@@ -37,6 +38,18 @@ def test_full_risk_rejects_below_hard_signal_thresholds(field):
 def test_full_risk_rejects_leverage_daily_loss_positions_and_event():
     result = evaluate_full_risk(context(requested_leverage=6, daily_realized_loss_percent=3, open_positions=3, event_blocked=True), RiskPolicy())
     assert set(result.reasons) >= {"leverage_above_maximum", "daily_loss_limit_reached", "max_open_positions_reached", "high_impact_event_guard"}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("confidence", math.nan), ("opportunity_score", math.inf),
+    ("risk_reward", -math.inf), ("requested_leverage", "5"),
+    ("daily_realized_loss_percent", math.nan), ("balance", math.inf),
+    ("equity", "10000"), ("open_positions", 1.5),
+])
+def test_full_risk_rejects_non_finite_or_non_numeric_context(field, value):
+    result = evaluate_full_risk(context(**{field: value}), RiskPolicy())
+    assert result.approved is False
+    assert result.reasons == ("risk_context_invalid",)
 
 
 def test_full_risk_requires_event_context_for_readiness_sensitive_evaluation():
