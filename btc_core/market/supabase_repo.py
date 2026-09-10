@@ -190,7 +190,7 @@ class SupabaseMarketRepository:
             "GET",
             "/market_scanner_candidates",
             params={
-                "select": "rank,symbol,timeframe,direction,opportunity_score,last_price,quote_volume_24h,funding_rate,open_interest_change_percent,long_short_ratio,spread_percent,created_at",
+                "select": "id,run_id,rank,symbol,timeframe,direction,opportunity_score,last_price,quote_volume_24h,funding_rate,open_interest_change_percent,long_short_ratio,spread_percent,created_at",
                 "run_id": f"eq.{run_id}",
                 "order": "rank.asc",
                 "limit": str(limit),
