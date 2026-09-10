@@ -109,3 +109,31 @@ async def test_gemini_falls_back_to_json_mime_when_structured_schema_is_rejected
     assert len(requests) == 2
     assert decision.provider is AIProvider.GEMINI
     assert decision.direction is Direction.LONG
+
+
+@pytest.mark.asyncio
+async def test_gemini_falls_back_to_plain_generate_content_when_response_format_is_rejected():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = json.loads(request.content)
+        if len(requests) == 1:
+            assert "schema" in body["generationConfig"]["responseFormat"]["text"]
+            return httpx.Response(400, json={"error": {"status": "INVALID_ARGUMENT"}})
+        if len(requests) == 2:
+            assert body["generationConfig"]["responseFormat"]["text"] == {
+                "mimeType": "application/json"
+            }
+            return httpx.Response(400, json={"error": {"status": "INVALID_ARGUMENT"}})
+
+        assert "generationConfig" not in body
+        assert "Return exactly one JSON object" in body["contents"][0]["parts"][0]["text"]
+        return httpx.Response(200, json=success_body())
+
+    async with GeminiProviderClient(config(), transport=httpx.MockTransport(handler)) as client:
+        decision = await client.analyze(make_snapshot())
+
+    assert len(requests) == 3
+    assert decision.provider is AIProvider.GEMINI
+    assert decision.direction is Direction.LONG
