@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack
+from functools import partial
 import os
 import time
 
+from btc_core.ai.models import AIProvider
+from btc_core.ai.orchestrator import AIAnalysisRunner
+from btc_core.ai.providers.base import AIProviderRuntimeConfig
+from btc_core.ai.providers.factory import build_provider_client
+from btc_core.ai.snapshot import build_ai_snapshot
+from btc_core.ai.supabase_repo import SupabaseAIAnalysisRepository
 from btc_core.market.binance_usdm import BinanceUsdMClient
 from btc_core.market.realtime import BinanceUsdMRealtimeClient, LiveMarketAggregator
 from btc_core.market.scanner import BinanceOpportunityScanner, MarketScanResult
 from btc_core.market.supabase_repo import SupabaseMarketRepository
 from btc_core.news.enrichment import RecentNewsScoreProvider
 from btc_core.news.supabase_repo import SupabaseNewsRepository
+from btc_core.risk.engine import RiskPolicy
 
 
 CORE_REALTIME_SYMBOLS = ("BTCUSDT", "SOLUSDT", "XRPUSDT", "ETHUSDT")
@@ -43,6 +51,36 @@ def _select_realtime_symbols(candidates, realtime_symbol_limit: int) -> list[str
     return symbols
 
 
+async def _cancel_ai_task(ai_task: asyncio.Task | None) -> None:
+    if ai_task is None:
+        return
+    if not ai_task.done():
+        ai_task.cancel()
+    try:
+        await ai_task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
+
+
+async def _finish_ai_task(ai_task: asyncio.Task | None) -> None:
+    if ai_task is None:
+        return
+    try:
+        summary = await ai_task
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(f"ai analysis task failed type={type(exc).__name__}")
+        return
+    if summary is not None:
+        print(
+            f"ai_analysis success={summary.success} failed={summary.failed} "
+            f"skipped={summary.skipped}"
+        )
+
+
 async def run_realtime_cycle(
     *,
     scanner,
@@ -54,33 +92,49 @@ async def run_realtime_cycle(
     realtime_symbol_limit: int,
     realtime_seconds: float,
     flush_interval_seconds: float,
+    ai_runner=None,
 ) -> MarketScanResult:
     result = await scanner.scan(
         timeframe=timeframe,
         universe_limit=universe_limit,
         candidate_limit=candidate_limit,
     )
-    await repo.persist_scan(result)
+    persisted = await repo.persist_scan(result)
 
-    symbols = _select_realtime_symbols(result.candidates, realtime_symbol_limit)
-    if not symbols:
-        return result
+    ai_task = None
+    if ai_runner is not None:
+        ai_task = asyncio.create_task(ai_runner.analyze_scan(result, persisted))
 
-    aggregator = LiveMarketAggregator()
-    last_flush = time.monotonic()
-    async for event in realtime.events(symbols, timeframe, run_seconds=realtime_seconds):
-        closed_candle = aggregator.apply(event)
-        if closed_candle is not None:
-            await repo.upsert_candle(closed_candle)
+    try:
+        symbols = _select_realtime_symbols(result.candidates, realtime_symbol_limit)
+        if symbols:
+            aggregator = LiveMarketAggregator()
+            last_flush = time.monotonic()
+            async for event in realtime.events(symbols, timeframe, run_seconds=realtime_seconds):
+                closed_candle = aggregator.apply(event)
+                if closed_candle is not None:
+                    await repo.upsert_candle(closed_candle)
 
-        now = time.monotonic()
-        if now - last_flush >= flush_interval_seconds:
-            await repo.upsert_live_states(aggregator.snapshots())
-            last_flush = now
+                now = time.monotonic()
+                if now - last_flush >= flush_interval_seconds:
+                    await repo.upsert_live_states(aggregator.snapshots())
+                    last_flush = now
 
-    states = aggregator.snapshots()
-    if states:
-        await repo.upsert_live_states(states)
+            states = aggregator.snapshots()
+            if states:
+                await repo.upsert_live_states(states)
+    except asyncio.CancelledError:
+        await _cancel_ai_task(ai_task)
+        raise
+    except Exception:
+        await _cancel_ai_task(ai_task)
+        raise
+
+    try:
+        await _finish_ai_task(ai_task)
+    except asyncio.CancelledError:
+        await _cancel_ai_task(ai_task)
+        raise
     return result
 
 
@@ -115,6 +169,7 @@ async def run_forever() -> None:
     flush_interval = _env_float("REALTIME_FLUSH_SECONDS", 3.0, minimum=1.0, maximum=60.0)
     retry_delay = _env_float("WORKER_RETRY_SECONDS", 10.0, minimum=1.0, maximum=300.0)
     news_enrichment_enabled = _env_flag("NEWS_ENRICHMENT_V1_ENABLED", False)
+    ai_analysis_enabled = _env_flag("AI_ANALYSIS_V1_ENABLED", False)
 
     async with AsyncExitStack() as stack:
         client = await stack.enter_async_context(BinanceUsdMClient())
@@ -125,21 +180,84 @@ async def run_forever() -> None:
             )
         )
 
-        news_score_provider = None
-        if news_enrichment_enabled:
+        news_repo = None
+        if news_enrichment_enabled or ai_analysis_enabled:
             news_repo = await stack.enter_async_context(
                 SupabaseNewsRepository(
                     supabase_url=supabase_url,
                     api_key=service_role_key,
                 )
             )
-            news_score_provider = RecentNewsScoreProvider(repo=news_repo)
+
+        news_score_provider = (
+            RecentNewsScoreProvider(repo=news_repo)
+            if news_enrichment_enabled and news_repo is not None
+            else None
+        )
 
         scanner = BinanceOpportunityScanner(
             client=client,
             concurrency=concurrency,
             news_score_provider=news_score_provider,
         )
+
+        ai_runner = None
+        if ai_analysis_enabled:
+            provider_name = os.getenv("AI_PROVIDER", "").strip().upper()
+            model_name = os.getenv("AI_MODEL", "").strip()
+            ai_api_key = os.getenv("AI_API_KEY", "").strip()
+            ai_base_url = os.getenv("AI_BASE_URL", "").strip()
+            if not provider_name or not model_name or not ai_api_key:
+                print("ai analysis disabled: provider/model/api key not configured")
+            else:
+                try:
+                    provider = AIProvider(provider_name)
+                    provider_config = AIProviderRuntimeConfig(
+                        provider=provider,
+                        model=model_name,
+                        api_key=ai_api_key,
+                        base_url=ai_base_url,
+                        timeout_seconds=_env_float(
+                            "AI_TIMEOUT_SECONDS", 20.0, minimum=1.0, maximum=120.0
+                        ),
+                        max_retries=_env_int(
+                            "AI_MAX_RETRIES", 1, minimum=0, maximum=1
+                        ),
+                    )
+                    provider_client = build_provider_client(provider_config)
+                    provider_client = await stack.enter_async_context(provider_client)
+                    ai_repo = await stack.enter_async_context(
+                        SupabaseAIAnalysisRepository(
+                            supabase_url=supabase_url,
+                            api_key=service_role_key,
+                        )
+                    )
+                    snapshot_builder = partial(
+                        build_ai_snapshot,
+                        market_client=client,
+                        news_repo=news_repo,
+                    )
+                    ai_runner = AIAnalysisRunner(
+                        provider_client=provider_client,
+                        analysis_repo=ai_repo,
+                        snapshot_builder=snapshot_builder,
+                        provider=provider,
+                        model=model_name,
+                        candidate_limit=_env_int(
+                            "AI_ANALYSIS_CANDIDATE_LIMIT", 3, minimum=1, maximum=50
+                        ),
+                        concurrency=_env_int(
+                            "AI_ANALYSIS_CONCURRENCY", 2, minimum=1, maximum=20
+                        ),
+                        min_opportunity_score=_env_float(
+                            "AI_MIN_OPPORTUNITY_SCORE", 65.0, minimum=0.0, maximum=100.0
+                        ),
+                        policy=RiskPolicy(),
+                    )
+                except Exception as exc:
+                    print(f"ai analysis disabled: invalid configuration type={type(exc).__name__}")
+                    ai_runner = None
+
         realtime = BinanceUsdMRealtimeClient()
         while True:
             try:
@@ -153,6 +271,7 @@ async def run_forever() -> None:
                     realtime_symbol_limit=realtime_symbol_limit,
                     realtime_seconds=realtime_seconds,
                     flush_interval_seconds=flush_interval,
+                    ai_runner=ai_runner,
                 )
                 print(
                     f"scanner cycle complete timeframe={result.timeframe} "

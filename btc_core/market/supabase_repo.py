@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
 from btc_core.market.models import Candle
 from btc_core.market.realtime import LiveMarketState
@@ -11,6 +13,21 @@ from btc_core.market.scanner import MarketScanResult
 
 class SupabaseRepositoryError(RuntimeError):
     pass
+
+
+class PersistedCandidateRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: int = Field(gt=0)
+    rank: int = Field(ge=1)
+    symbol: str = Field(min_length=1, max_length=30)
+
+
+class PersistedScanRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_id: str = Field(min_length=1)
+    candidates: tuple[PersistedCandidateRef, ...] = ()
 
 
 class SupabaseMarketRepository:
@@ -54,7 +71,7 @@ class SupabaseMarketRepository:
             raise SupabaseRepositoryError(f"Supabase HTTP {response.status_code}: {detail}")
         return response
 
-    async def persist_scan(self, result: MarketScanResult) -> str:
+    async def persist_scan(self, result: MarketScanResult) -> PersistedScanRef:
         now = datetime.now(timezone.utc).isoformat()
         run_response = await self._request(
             "POST",
@@ -75,6 +92,7 @@ class SupabaseMarketRepository:
             raise SupabaseRepositoryError("Supabase did not return a scanner run id")
         run_id = str(rows[0]["id"])
 
+        persisted_candidates: tuple[PersistedCandidateRef, ...] = ()
         if result.candidates:
             payload = []
             for candidate in result.candidates:
@@ -106,8 +124,28 @@ class SupabaseMarketRepository:
                         "spread_percent": candidate.spread_percent,
                     }
                 )
-            await self._request("POST", "/market_scanner_candidates", json=payload)
-        return run_id
+            candidate_response = await self._request(
+                "POST",
+                "/market_scanner_candidates",
+                headers={"Prefer": "return=representation"},
+                json=payload,
+            )
+            candidate_rows = candidate_response.json()
+            if not isinstance(candidate_rows, list) or len(candidate_rows) != len(result.candidates):
+                raise SupabaseRepositoryError("Supabase did not return all scanner candidate ids")
+            try:
+                persisted_candidates = tuple(
+                    PersistedCandidateRef(
+                        id=int(row["id"]),
+                        rank=int(row["rank"]),
+                        symbol=str(row["symbol"]).strip().upper(),
+                    )
+                    for row in candidate_rows
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SupabaseRepositoryError("Supabase returned invalid scanner candidate references") from exc
+
+        return PersistedScanRef(run_id=run_id, candidates=persisted_candidates)
 
     async def upsert_live_states(self, states: list[LiveMarketState]) -> None:
         if not states:
@@ -152,7 +190,7 @@ class SupabaseMarketRepository:
             "GET",
             "/market_scanner_candidates",
             params={
-                "select": "rank,symbol,timeframe,direction,opportunity_score,last_price,quote_volume_24h,funding_rate,open_interest_change_percent,long_short_ratio,spread_percent,created_at",
+                "select": "id,run_id,rank,symbol,timeframe,direction,opportunity_score,last_price,quote_volume_24h,funding_rate,open_interest_change_percent,long_short_ratio,spread_percent,created_at",
                 "run_id": f"eq.{run_id}",
                 "order": "rank.asc",
                 "limit": str(limit),

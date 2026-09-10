@@ -127,3 +127,50 @@ async def test_supabase_recent_asset_news_filters_symbol_and_closed_window():
     ]
     assert params["order"] == "published_at.desc"
     assert params["limit"] == "50"
+
+
+@pytest.mark.asyncio
+async def test_supabase_recent_asset_context_selects_only_sanitized_bounded_fields():
+    from btc_core.news.models import NewsImpactLevel
+    from btc_core.news.supabase_repo import SupabaseNewsRepository
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "title": "ETF flow update",
+                    "summary": "Institutional flow increased.",
+                    "published_at": "2026-09-10T02:30:00+00:00",
+                    "impact_level": "MEDIUM",
+                    "credibility_score": 90,
+                    "news_assets": [{"symbol": "BTCUSDT"}],
+                }
+            ],
+        )
+
+    since = datetime(2026, 9, 9, 3, 0, tzinfo=timezone.utc)
+    until = datetime(2026, 9, 10, 3, 0, tzinfo=timezone.utc)
+    async with SupabaseNewsRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="secret",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        stories = await repo.recent_asset_context("btcusdt", since, until, limit=5)
+
+    assert len(stories) == 1
+    assert stories[0].title == "ETF flow update"
+    assert stories[0].impact_level is NewsImpactLevel.MEDIUM
+    params = requests[0].url.params
+    assert params["news_assets.symbol"] == "eq.BTCUSDT"
+    assert params.get_list("published_at") == [
+        f"gte.{since.isoformat()}",
+        f"lte.{until.isoformat()}",
+    ]
+    assert params["limit"] == "5"
+    selected = params["select"]
+    assert "title" in selected and "summary" in selected
+    assert "raw_data" not in selected
