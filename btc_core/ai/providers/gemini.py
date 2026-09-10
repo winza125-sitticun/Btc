@@ -166,6 +166,9 @@ class GeminiProviderClient:
         return schema
 
     def _interaction_payload(self, snapshot: AIAnalysisSnapshot) -> dict[str, Any]:
+        thinking_level = (
+            "minimal" if self.config.model == "gemini-3.5-flash-lite" else "low"
+        )
         return {
             "model": self.config.model,
             "store": False,
@@ -176,7 +179,7 @@ class GeminiProviderClient:
                 + snapshot.model_dump_json()
             ),
             "generation_config": {
-                "thinking_level": "low",
+                "thinking_level": thinking_level,
                 "max_output_tokens": 512,
             },
             "response_format": {
@@ -246,7 +249,7 @@ class GeminiProviderClient:
         return exc.code == "INVALID_CONFIG" and exc.status_code == 400
 
     async def analyze(self, snapshot: AIAnalysisSnapshot) -> AIDecision:
-        if self.config.model.startswith("gemini-3.8-"):
+        if self.config.model.startswith("gemini-3"):
             response = await request_with_retry(
                 self._client,
                 "POST",
