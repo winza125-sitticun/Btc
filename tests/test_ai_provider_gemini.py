@@ -28,8 +28,13 @@ async def test_gemini_uses_configured_model_and_structured_json_output():
         assert request.url.path.endswith("/models/gemini-test:generateContent")
         assert request.headers["x-goog-api-key"] == "gemini-secret"
         generation = body["generationConfig"]
-        assert generation["responseMimeType"] == "application/json"
-        schema = generation["responseJsonSchema"]
+        assert "responseMimeType" not in generation
+        assert "responseJsonSchema" not in generation
+
+        response_format = generation["responseFormat"]
+        assert set(response_format) == {"text"}
+        assert response_format["text"]["mimeType"] == "application/json"
+        schema = response_format["text"]["schema"]
         assert schema["type"] == "object"
         assert "direction" in schema["properties"]
 

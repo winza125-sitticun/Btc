@@ -110,8 +110,12 @@ class GeminiProviderClient:
                 }
             ],
             "generationConfig": {
-                "responseMimeType": "application/json",
-                "responseJsonSchema": response_schema,
+                "responseFormat": {
+                    "text": {
+                        "mimeType": "application/json",
+                        "schema": response_schema,
+                    }
+                }
             },
         }
 
