@@ -18,6 +18,37 @@ def config() -> AIProviderRuntimeConfig:
     )
 
 
+def success_body() -> dict:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "provider": "GEMINI",
+                                    "model": "gemini-test",
+                                    "symbol": "BTCUSDT",
+                                    "timeframe": "15m",
+                                    "direction": "LONG",
+                                    "confidence": 84,
+                                    "entry_min": 99,
+                                    "entry_max": 100,
+                                    "stop_loss": 96,
+                                    "take_profits": [104, 108],
+                                    "risk_reward": 2.5,
+                                    "reason_summary": "Trend alignment.",
+                                }
+                            )
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+
 @pytest.mark.asyncio
 async def test_gemini_uses_configured_model_and_structured_json_output():
     requests: list[httpx.Request] = []
@@ -47,41 +78,34 @@ async def test_gemini_uses_configured_model_and_structured_json_output():
         assert schema["properties"]["take_profits"]["minItems"] == 1
         assert schema["properties"]["take_profits"]["maxItems"] == 5
 
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {
-                        "content": {
-                            "parts": [
-                                {
-                                    "text": json.dumps(
-                                        {
-                                            "provider": "GEMINI",
-                                            "model": "gemini-test",
-                                            "symbol": "BTCUSDT",
-                                            "timeframe": "15m",
-                                            "direction": "LONG",
-                                            "confidence": 84,
-                                            "entry_min": 99,
-                                            "entry_max": 100,
-                                            "stop_loss": 96,
-                                            "take_profits": [104, 108],
-                                            "risk_reward": 2.5,
-                                            "reason_summary": "Trend alignment.",
-                                        }
-                                    )
-                                }
-                            ]
-                        }
-                    }
-                ]
-            },
-        )
+        return httpx.Response(200, json=success_body())
 
     async with GeminiProviderClient(config(), transport=httpx.MockTransport(handler)) as client:
         decision = await client.analyze(make_snapshot())
 
     assert len(requests) == 1
+    assert decision.provider is AIProvider.GEMINI
+    assert decision.direction is Direction.LONG
+
+
+@pytest.mark.asyncio
+async def test_gemini_falls_back_to_json_mime_when_structured_schema_is_rejected():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = json.loads(request.content)
+        response_text = body["generationConfig"]["responseFormat"]["text"]
+        if len(requests) == 1:
+            assert "schema" in response_text
+            return httpx.Response(400, json={"error": {"status": "INVALID_ARGUMENT"}})
+
+        assert response_text == {"mimeType": "application/json"}
+        return httpx.Response(200, json=success_body())
+
+    async with GeminiProviderClient(config(), transport=httpx.MockTransport(handler)) as client:
+        decision = await client.analyze(make_snapshot())
+
+    assert len(requests) == 2
     assert decision.provider is AIProvider.GEMINI
     assert decision.direction is Direction.LONG
