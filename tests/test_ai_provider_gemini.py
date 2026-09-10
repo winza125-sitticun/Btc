@@ -32,6 +32,16 @@ async def test_gemini_uses_configured_model_and_structured_json_output():
         schema = generation["responseJsonSchema"]
         assert schema["type"] == "object"
         assert "direction" in schema["properties"]
+
+        encoded_schema = json.dumps(schema)
+        assert '"exclusiveMinimum"' not in encoded_schema
+        assert '"exclusiveMaximum"' not in encoded_schema
+        assert '"minLength"' not in encoded_schema
+        assert '"maxLength"' not in encoded_schema
+        assert schema["properties"]["entry_min"]["minimum"] == 0
+        assert schema["properties"]["take_profits"]["minItems"] == 1
+        assert schema["properties"]["take_profits"]["maxItems"] == 5
+
         return httpx.Response(
             200,
             json={
