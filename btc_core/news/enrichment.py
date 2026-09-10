@@ -21,6 +21,7 @@ class NewsScoreRepository(Protocol):
         self,
         symbol: str,
         since: datetime,
+        until: datetime,
         limit: int = 50,
     ) -> list[NewsScoreStory]: ...
 
@@ -86,6 +87,7 @@ class RecentNewsScoreProvider:
         stories = await self._repo.recent_asset_news(
             normalized_symbol,
             since,
+            now,
             limit=self._article_limit,
         )
         return calculate_news_score(
