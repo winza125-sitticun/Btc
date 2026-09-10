@@ -91,8 +91,22 @@ class GeminiProviderClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    def _request_payload(self, snapshot: AIAnalysisSnapshot) -> dict[str, Any]:
-        response_schema = _normalize_gemini_json_schema(AIDecision.model_json_schema())
+    def _request_payload(
+        self,
+        snapshot: AIAnalysisSnapshot,
+        *,
+        include_schema: bool = True,
+    ) -> dict[str, Any]:
+        response_text: dict[str, Any] = {"mimeType": "application/json"}
+        if include_schema:
+            response_text["schema"] = _normalize_gemini_json_schema(AIDecision.model_json_schema())
+            output_instruction = "Return one JSON object matching the response schema. "
+        else:
+            output_instruction = (
+                "Return exactly one JSON object with keys symbol, timeframe, direction, confidence, "
+                "entry_min, entry_max, stop_loss, take_profits, risk_reward, and reason_summary. "
+            )
+
         return {
             "contents": [
                 {
@@ -101,8 +115,8 @@ class GeminiProviderClient:
                         {
                             "text": (
                                 "Analyze this bounded crypto futures snapshot. "
-                                "Return one JSON object matching the response schema. "
-                                "Direction must be LONG, SHORT, or WAIT; never claim an order was executed.\n"
+                                + output_instruction
+                                + "Direction must be LONG, SHORT, or WAIT; never claim an order was executed.\n"
                                 + snapshot.model_dump_json()
                             )
                         }
@@ -111,10 +125,7 @@ class GeminiProviderClient:
             ],
             "generationConfig": {
                 "responseFormat": {
-                    "text": {
-                        "mimeType": "application/json",
-                        "schema": response_schema,
-                    }
+                    "text": response_text,
                 }
             },
         }
@@ -143,11 +154,23 @@ class GeminiProviderClient:
             raise AIProviderError("Gemini decision failed schema validation", code="INVALID_SCHEMA") from exc
 
     async def analyze(self, snapshot: AIAnalysisSnapshot) -> AIDecision:
-        response = await request_with_retry(
-            self._client,
-            "POST",
-            f"models/{self.config.model}:generateContent",
-            max_retries=self.config.max_retries,
-            json=self._request_payload(snapshot),
-        )
+        path = f"models/{self.config.model}:generateContent"
+        try:
+            response = await request_with_retry(
+                self._client,
+                "POST",
+                path,
+                max_retries=self.config.max_retries,
+                json=self._request_payload(snapshot),
+            )
+        except AIProviderError as exc:
+            if exc.code != "INVALID_CONFIG" or exc.status_code != 400:
+                raise
+            response = await request_with_retry(
+                self._client,
+                "POST",
+                path,
+                max_retries=self.config.max_retries,
+                json=self._request_payload(snapshot, include_schema=False),
+            )
         return self._parse_response(response)
