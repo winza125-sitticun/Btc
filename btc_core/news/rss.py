@@ -28,6 +28,7 @@ class NewsFeedClient:
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_seconds),
             transport=transport,
+            follow_redirects=True,
             headers={
                 "User-Agent": "btc-ai-futures-news-worker/0.1 (+https://github.com/winza125-sitticun/Btc)"
             },
