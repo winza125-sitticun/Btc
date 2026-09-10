@@ -54,3 +54,13 @@ def test_same_candle_stop_wins_over_tp_and_missing_data_is_not_a_win():
     missing = evaluate_signal_outcome(spec, ())
     assert result.outcome == "LOSS" and result.stop_touched is True and result.highest_tp_hit == 0
     assert missing.data_quality == "MISSING" and missing.outcome not in {"WIN", "LOSS"}
+
+def test_out_of_horizon_candle_does_not_change_return_or_mfe():
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    result = evaluate_signal_outcome(SignalSpec(direction="LONG", entry_min=100, entry_max=100, stop=95, take_profits=(105,), signal_timestamp=start, horizon="1H"), (bar(start + timedelta(minutes=5), high=101, low=99, close=101), bar(start + timedelta(hours=2), high=200, low=200, close=200)))
+    assert result.final_return_percent == 1 and result.mfe_percent == 1
+
+def test_short_signed_excursions_and_long_horizons():
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    result = evaluate_signal_outcome(SignalSpec(direction="SHORT", entry_min=100, entry_max=100, stop=110, take_profits=(90,), signal_timestamp=start, horizon="4H"), (bar(start + timedelta(hours=1), high=105, low=95, close=100), bar(start + timedelta(hours=4), high=102, low=90, close=92)))
+    assert result.mfe_percent == 10 and result.mae_percent == -5 and result.highest_tp_hit == 1

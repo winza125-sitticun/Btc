@@ -46,19 +46,20 @@ class SignalOutcome(BaseModel):
 
 def evaluate_signal_outcome(spec: SignalSpec, bars: tuple[OHLCBar, ...] | list[OHLCBar]) -> SignalOutcome:
     ordered = tuple(sorted(bars, key=lambda item: item.timestamp))
-    if not ordered:
+    due = spec.signal_timestamp + timedelta(hours=int(spec.horizon[:-1]))
+    bounded = tuple(item for item in ordered if spec.signal_timestamp <= item.timestamp <= due)
+    if not bounded:
         return SignalOutcome()
+    quality = "FULL" if bounded[-1].timestamp >= due else "PARTIAL"
     if spec.direction in ("WAIT", "EXIT"):
-        return SignalOutcome(outcome="NEUTRAL", data_quality="FULL")
+        return SignalOutcome(outcome="NEUTRAL", data_quality=quality)
     reference = (spec.entry_min + spec.entry_max) / 2
     touched = False
     stop_touched = False
     highest = 0
     mfe = 0.0
     mae = 0.0
-    final_close = ordered[-1].close
-    due = spec.signal_timestamp + timedelta(hours=int(spec.horizon[:-1]))
-    bounded = tuple(item for item in ordered if spec.signal_timestamp <= item.timestamp <= due)
+    final_close = bounded[-1].close
     for item in bounded:
         if spec.direction == "LONG":
             mfe = max(mfe, (item.high - reference) / reference * 100)
@@ -79,9 +80,6 @@ def evaluate_signal_outcome(spec: SignalSpec, bars: tuple[OHLCBar, ...] | list[O
             break  # conservative: stop wins when TP and SL share a candle
         if touched and tp_hits:
             highest = max(highest, max(tp_hits))
-    quality = "FULL" if bounded and bounded[-1].timestamp >= due else "PARTIAL"
-    if not bounded:
-        return SignalOutcome(data_quality="MISSING")
     if not touched:
         return SignalOutcome(mfe_percent=round(mfe, 8), mae_percent=round(mae, 8), outcome="NO_FILL", data_quality=quality)
     if stop_touched:

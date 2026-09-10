@@ -35,3 +35,19 @@ async def test_candles_query_is_exact_and_fallback_is_bounded_public_callback():
     assert requests[0].url.params["symbol"] == "eq.BTCUSDT"
     assert requests[0].url.params["timeframe"] == "eq.1m"
     assert called == [("BTCUSDT", "1m", 1500)]
+
+@pytest.mark.asyncio
+async def test_partial_persisted_coverage_uses_fallback_and_discovery_scopes_success():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        if request.url.path.endswith("market_candles"):
+            return httpx.Response(200, json=[{"open_time":"2026-01-01T00:00:00+00:00","close_time":"2026-01-01T00:01:00+00:00","open":1,"high":2,"low":1,"close":2}])
+        return httpx.Response(200, json=[{"id":1,"market_ai_signal_outcomes":[{"horizon":"1H"}]}])
+    async def fallback(*args): return []
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    async with SupabaseStrategyRepository(supabase_url="https://x.supabase.co", api_key="service", transport=httpx.MockTransport(handler)) as repo:
+        await repo.candles("BTCUSDT", "1m", start, start + __import__('datetime').timedelta(hours=1), fallback=fallback)
+        await repo.analyses_missing_outcomes()
+    assert requests[0].url.path.endswith("market_candles") and len(requests) == 2
+    assert requests[-1].url.params["status"] == "eq.SUCCESS"

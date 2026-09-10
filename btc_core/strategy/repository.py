@@ -31,7 +31,7 @@ class SupabaseStrategyRepository:
 
     async def analyses_missing_outcomes(self, limit: int = 100) -> list[dict[str, Any]]:
         if not 1 <= limit <= 500: raise ValueError("limit must be between 1 and 500")
-        response = await self._request("GET", "/market_ai_analyses", params={"select": "id,scanner_candidate_id,symbol,timeframe,ai_direction,entry_min,entry_max,stop_loss,take_profits,created_at,market_ai_signal_outcomes(horizon)", "ai_direction": "in.(LONG,SHORT,WAIT)", "limit": str(limit)})
+        response = await self._request("GET", "/market_ai_analyses", params={"select": "id,scanner_candidate_id,symbol,timeframe,ai_direction,entry_min,entry_max,stop_loss,take_profits,created_at,market_ai_signal_outcomes(horizon)", "ai_direction": "in.(LONG,SHORT,WAIT,EXIT)", "status": "eq.SUCCESS", "limit": str(limit)})
         rows = response.json()
         if not isinstance(rows, list): return []
         return [row for row in rows if len({str(item.get("horizon")) for item in (row.get("market_ai_signal_outcomes") or []) if isinstance(item, dict)}) < 3]
@@ -49,7 +49,10 @@ class SupabaseStrategyRepository:
 
     async def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, fallback: Callable[[str, str, datetime, datetime, int], Awaitable[list[OHLCBar]]] | None = None) -> list[OHLCBar]:
         rows = await self.persisted_candles(symbol, timeframe, start, end)
-        if rows or fallback is None: return [OHLCBar(timestamp=r["open_time"], open=r["open"], high=r["high"], low=r["low"], close=r["close"]) for r in rows]
+        coverage_complete = bool(rows) and str(rows[-1].get("close_time", "")) >= end.isoformat()
+        if coverage_complete or fallback is None: return [OHLCBar(timestamp=r["open_time"], open=r["open"], high=r["high"], low=r["low"], close=r["close"]) for r in rows]
+        if "private" in getattr(fallback, "__name__", "").lower() or "private" in getattr(fallback, "__module__", "").lower():
+            raise ValueError("fallback must be a public Binance klines callback")
         result = await fallback(symbol.strip().upper(), timeframe, start, end, 1500)
         if len(result) > 1500: raise StrategyRepositoryError("fallback candle response exceeded bound")
         return list(result)
