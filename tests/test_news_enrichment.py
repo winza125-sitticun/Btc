@@ -30,6 +30,13 @@ def test_news_score_uses_impact_credibility_and_recency_with_neutral_baseline():
     )
     assert calculate_news_score([expired_high], now=now) == 50.0
 
+    future_high = NewsScoreStory(
+        published_at=now + timedelta(minutes=1),
+        impact_level=NewsImpactLevel.HIGH,
+        credibility_score=100,
+    )
+    assert calculate_news_score([future_high], now=now) == 50.0
+
 
 def test_news_score_caps_at_100():
     from btc_core.news.enrichment import NewsScoreStory, calculate_news_score
