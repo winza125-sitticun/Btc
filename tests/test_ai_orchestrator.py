@@ -175,6 +175,28 @@ async def test_provider_failure_is_sanitized_and_other_candidates_continue():
 
 
 @pytest.mark.asyncio
+async def test_provider_failure_persists_only_safe_http_status_diagnostic():
+    item = candidate(1, "BTCUSDT", 90)
+    repo = FakeAnalysisRepo()
+
+    class StatusProvider:
+        async def analyze(self, snapshot):
+            raise AIProviderError(
+                "sensitive provider body must not be persisted",
+                code="INVALID_CONFIG",
+                status_code=404,
+            )
+
+    summary = await runner(StatusProvider(), repo).analyze_scan(scan(item), persisted(item))
+
+    assert summary.failed == 1
+    failed = repo.records[0]
+    assert failed.error_code == "INVALID_CONFIG"
+    assert failed.error_message == "AI provider failure (INVALID_CONFIG, status=404)"
+    assert "sensitive provider body" not in failed.error_message
+
+
+@pytest.mark.asyncio
 async def test_identity_mismatch_is_invalid_response_not_success():
     item = candidate(1, "BTCUSDT", 90)
     repo = FakeAnalysisRepo()
