@@ -63,3 +63,49 @@ async def test_persist_scan_returns_real_candidate_ids_from_postgrest():
     assert persisted.candidates[0].id == 901
     assert persisted.candidates[0].rank == 1
     assert persisted.candidates[0].symbol == "BTCUSDT"
+
+
+@pytest.mark.asyncio
+async def test_latest_candidates_returns_candidate_and_run_identity():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/market_scanner_runs"):
+            return httpx.Response(
+                200,
+                json=[{"id": "run-current", "timeframe": "15m", "completed_at": "2026-09-10T05:00:00Z"}],
+            )
+        if request.url.path.endswith("/market_scanner_candidates"):
+            select = request.url.params["select"]
+            assert "id" in select.split(",")
+            assert "run_id" in select.split(",")
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 902,
+                        "run_id": "run-current",
+                        "rank": 1,
+                        "symbol": "BTCUSDT",
+                        "timeframe": "15m",
+                        "direction": "LONG",
+                        "opportunity_score": 82,
+                        "last_price": 62000,
+                        "quote_volume_24h": 1_000_000,
+                        "funding_rate": 0.0001,
+                        "open_interest_change_percent": 2.0,
+                        "long_short_ratio": 1.1,
+                        "spread_percent": 0.01,
+                        "created_at": "2026-09-10T05:00:01Z",
+                    }
+                ],
+            )
+        raise AssertionError(request.url)
+
+    async with SupabaseMarketRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="anon-key",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        rows = await repo.latest_candidates("15m", 10)
+
+    assert rows[0]["id"] == 902
+    assert rows[0]["run_id"] == "run-current"
