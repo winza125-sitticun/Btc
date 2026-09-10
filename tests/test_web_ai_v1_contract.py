@@ -41,3 +41,11 @@ def test_ai_card_styles_exist_without_new_ui_framework():
     package = (ROOT.parent / "package.json").read_text(encoding="utf-8").lower()
     for framework in ("tailwind", "bootstrap", "material-ui", "@mui/"):
         assert framework not in package
+
+
+def test_web_matches_ai_analysis_to_current_scanner_candidate_identity():
+    api = (ROOT / "api.ts").read_text(encoding="utf-8")
+    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
+    assert "id: number" in api
+    assert "run_id: string" in api
+    assert "analysis.scanner_candidate_id !== candidate.id" in app
