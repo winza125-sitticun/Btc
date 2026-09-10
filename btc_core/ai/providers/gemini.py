@@ -11,6 +11,57 @@ from btc_core.ai.models import AIDecision
 from btc_core.ai.providers.base import AIProviderError, AIProviderRuntimeConfig, request_with_retry
 
 
+_GEMINI_JSON_SCHEMA_KEYS = {
+    "$id",
+    "$defs",
+    "$ref",
+    "$anchor",
+    "type",
+    "format",
+    "title",
+    "description",
+    "enum",
+    "items",
+    "prefixItems",
+    "minItems",
+    "maxItems",
+    "minimum",
+    "maximum",
+    "anyOf",
+    "oneOf",
+    "properties",
+    "additionalProperties",
+    "required",
+}
+
+
+def _normalize_gemini_json_schema(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_normalize_gemini_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "exclusiveMinimum":
+            normalized.setdefault("minimum", item)
+            continue
+        if key == "exclusiveMaximum":
+            normalized.setdefault("maximum", item)
+            continue
+        if key not in _GEMINI_JSON_SCHEMA_KEYS:
+            continue
+
+        if key in {"properties", "$defs"} and isinstance(item, dict):
+            normalized[key] = {
+                name: _normalize_gemini_json_schema(schema)
+                for name, schema in item.items()
+            }
+        else:
+            normalized[key] = _normalize_gemini_json_schema(item)
+    return normalized
+
+
 class GeminiProviderClient:
     def __init__(
         self,
@@ -41,6 +92,7 @@ class GeminiProviderClient:
         await self._client.aclose()
 
     def _request_payload(self, snapshot: AIAnalysisSnapshot) -> dict[str, Any]:
+        response_schema = _normalize_gemini_json_schema(AIDecision.model_json_schema())
         return {
             "contents": [
                 {
@@ -59,7 +111,7 @@ class GeminiProviderClient:
             ],
             "generationConfig": {
                 "responseMimeType": "application/json",
-                "responseJsonSchema": AIDecision.model_json_schema(),
+                "responseJsonSchema": response_schema,
             },
         }
 
