@@ -137,3 +137,59 @@ async def test_operational_health_rejects_an_unbounded_window():
     ) as repo:
         with pytest.raises(ValueError, match="between 20 and 200"):
             await repo.operational_health("15m", 201)
+
+
+@pytest.mark.asyncio
+async def test_operational_health_degrades_from_newest_twenty_attempts_only():
+    """Older successful rows must not mask a current rolling-canary failure."""
+    newest_rows = [
+        {
+            "status": "FAILED",
+            "error_code": "TIMEOUT",
+            "latency_ms": 2000,
+            "provider": "GEMINI",
+            "model": "gemini-test",
+            "timeframe": "15m",
+            "created_at": "2026-09-10T00:20:00+00:00",
+        }
+    ] * 3 + [
+        {
+            "status": "SUCCESS",
+            "error_code": None,
+            "latency_ms": 2000,
+            "provider": "GEMINI",
+            "model": "gemini-test",
+            "timeframe": "15m",
+            "created_at": "2026-09-10T00:19:00+00:00",
+        }
+    ] * 17
+    older_success_rows = [
+        {
+            "status": "SUCCESS",
+            "error_code": None,
+            "latency_ms": 2000,
+            "provider": "GEMINI",
+            "model": "gemini-test",
+            "timeframe": "15m",
+            "created_at": "2026-09-09T00:00:00+00:00",
+        }
+    ] * 180
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/market_ai_analyses"):
+            return httpx.Response(200, json=newest_rows + older_success_rows)
+        if request.url.path.endswith("/market_scanner_runs"):
+            return httpx.Response(200, json=[{"failure_count": 0}] * 20)
+        raise AssertionError(f"unexpected path: {request.url.path}")
+
+    async with SupabaseAIAnalysisRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="anon-key",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        snapshot = await repo.operational_health("15m", 200)
+
+    assert snapshot.attempts == 20
+    assert snapshot.successes == 17
+    assert snapshot.status == "DEGRADED"
+    assert snapshot.can_expand is False

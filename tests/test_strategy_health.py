@@ -66,6 +66,22 @@ def test_provider_health_never_expands_an_insufficient_sample():
     assert result.can_expand is False
 
 
+def test_provider_health_never_expands_without_scanner_cycle_evidence():
+    """Treating an absent scanner sample as a perfect zero-failure rate is unsafe."""
+    result = compute_provider_health(
+        attempts=20,
+        successes=20,
+        invalid_responses=0,
+        latencies_ms=[100] * 20,
+        scanner_failures=0,
+        scanner_cycles=0,
+    )
+
+    assert result.scanner_failure_rate is None
+    assert result.can_expand is False
+    assert "no completed scanner cycles observed" in result.reasons
+
+
 @pytest.mark.parametrize("latencies_ms", ([20_001] * 20,))
 def test_provider_health_degrades_when_p95_exceeds_twenty_seconds(latencies_ms):
     """A slow provider is degraded even when its success count is perfect."""

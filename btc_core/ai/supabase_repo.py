@@ -17,6 +17,7 @@ _SAFE_SELECT = (
     "attempt_count,error_code,created_at,completed_at"
 )
 _HEALTH_SELECT = "status,error_code,latency_ms,provider,model,timeframe,created_at"
+_ROLLING_CANARY_ATTEMPTS = 20
 _SECRET_KEYS = {
     "authorization",
     "api_key",
@@ -150,7 +151,12 @@ class SupabaseAIAnalysisRepository:
         return rows if isinstance(rows, list) else []
 
     async def operational_health(self, timeframe: str, window: int) -> ProviderHealthSnapshot:
-        """Read bounded, non-secret operational evidence for one scanner timeframe."""
+        """Read a rolling 20-attempt, cross-provider timeframe health snapshot.
+
+        ``window`` controls the bounded PostgREST lookback (20--200 rows), but
+        canary degradation is always computed from the newest 20 attempts and
+        completed scanner cycles so older successes cannot mask a regression.
+        """
         normalized = timeframe.strip()
         if not normalized:
             raise ValueError("timeframe is required")
@@ -180,8 +186,12 @@ class SupabaseAIAnalysisRepository:
         )
         analysis_rows = analyses_response.json()
         scanner_rows = scanner_response.json()
-        safe_analysis_rows = analysis_rows if isinstance(analysis_rows, list) else []
-        safe_scanner_rows = scanner_rows if isinstance(scanner_rows, list) else []
+        safe_analysis_rows = (
+            analysis_rows[:_ROLLING_CANARY_ATTEMPTS] if isinstance(analysis_rows, list) else []
+        )
+        safe_scanner_rows = (
+            scanner_rows[:_ROLLING_CANARY_ATTEMPTS] if isinstance(scanner_rows, list) else []
+        )
         latencies = [
             int(row["latency_ms"])
             for row in safe_analysis_rows
