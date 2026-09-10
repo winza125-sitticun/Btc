@@ -4,13 +4,24 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
 from btc_core.news.enrichment import NewsScoreStory
-from btc_core.news.models import EnrichedNewsArticle, NewsSourceClass, RecentNewsStory
+from btc_core.news.models import EnrichedNewsArticle, NewsImpactLevel, NewsSourceClass, RecentNewsStory
 
 
 class SupabaseNewsRepositoryError(RuntimeError):
     pass
+
+
+class RecentAssetContextStory(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    title: str = Field(min_length=1, max_length=500)
+    summary: str | None = Field(default=None, max_length=2000)
+    published_at: datetime
+    impact_level: NewsImpactLevel
+    credibility_score: float = Field(ge=0, le=100)
 
 
 class SupabaseNewsRepository:
@@ -157,6 +168,56 @@ class SupabaseNewsRepository:
             try:
                 stories.append(
                     NewsScoreStory(
+                        published_at=row["published_at"],
+                        impact_level=row["impact_level"],
+                        credibility_score=row["credibility_score"],
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return stories
+
+    async def recent_asset_context(
+        self,
+        symbol: str,
+        since: datetime,
+        until: datetime,
+        limit: int = 5,
+    ) -> list[RecentAssetContextStory]:
+        normalized_symbol = symbol.strip().upper()
+        if not normalized_symbol:
+            return []
+        if not 1 <= limit <= 20:
+            raise ValueError("limit must be between 1 and 20")
+
+        response = await self._request(
+            "GET",
+            "/news_articles",
+            params=[
+                (
+                    "select",
+                    "title,summary,published_at,impact_level,credibility_score,news_assets!inner(symbol)",
+                ),
+                ("news_assets.symbol", f"eq.{normalized_symbol}"),
+                ("published_at", f"gte.{since.isoformat()}"),
+                ("published_at", f"lte.{until.isoformat()}"),
+                ("order", "published_at.desc"),
+                ("limit", str(limit)),
+            ],
+        )
+        rows = response.json()
+        if not isinstance(rows, list):
+            return []
+
+        stories: list[RecentAssetContextStory] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                stories.append(
+                    RecentAssetContextStory(
+                        title=row["title"],
+                        summary=row.get("summary"),
                         published_at=row["published_at"],
                         impact_level=row["impact_level"],
                         credibility_score=row["credibility_score"],
