@@ -69,8 +69,8 @@ async def test_recent_news_score_provider_uses_24_hour_window():
         def __init__(self):
             self.calls = []
 
-        async def recent_asset_news(self, symbol, since, limit=50):
-            self.calls.append((symbol, since, limit))
+        async def recent_asset_news(self, symbol, since, until, limit=50):
+            self.calls.append((symbol, since, until, limit))
             return [
                 NewsScoreStory(
                     published_at=now,
@@ -83,11 +83,11 @@ async def test_recent_news_score_provider_uses_24_hour_window():
     provider = RecentNewsScoreProvider(repo=repo, now_factory=lambda: now)
 
     assert await provider.score("btcusdt") == 62.0
-    assert repo.calls == [("BTCUSDT", now - timedelta(hours=24), 50)]
+    assert repo.calls == [("BTCUSDT", now - timedelta(hours=24), now, 50)]
 
 
 @pytest.mark.asyncio
-async def test_supabase_recent_asset_news_filters_symbol_and_window():
+async def test_supabase_recent_asset_news_filters_symbol_and_closed_window():
     from btc_core.news.models import NewsImpactLevel
     from btc_core.news.supabase_repo import SupabaseNewsRepository
 
@@ -108,18 +108,22 @@ async def test_supabase_recent_asset_news_filters_symbol_and_window():
         )
 
     since = datetime(2026, 9, 9, 3, 0, tzinfo=timezone.utc)
+    until = datetime(2026, 9, 10, 3, 0, tzinfo=timezone.utc)
     async with SupabaseNewsRepository(
         supabase_url="https://project.supabase.co",
         api_key="secret",
         transport=httpx.MockTransport(handler),
     ) as repo:
-        stories = await repo.recent_asset_news("btcusdt", since, limit=50)
+        stories = await repo.recent_asset_news("btcusdt", since, until, limit=50)
 
     assert len(stories) == 1
     assert stories[0].impact_level is NewsImpactLevel.HIGH
     assert stories[0].credibility_score == 95
-    params = dict(requests[0].url.params)
+    params = requests[0].url.params
     assert params["news_assets.symbol"] == "eq.BTCUSDT"
-    assert params["published_at"] == f"gte.{since.isoformat()}"
+    assert params.get_list("published_at") == [
+        f"gte.{since.isoformat()}",
+        f"lte.{until.isoformat()}",
+    ]
     assert params["order"] == "published_at.desc"
     assert params["limit"] == "50"
