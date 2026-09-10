@@ -175,7 +175,10 @@ class GeminiProviderClient:
                 "Direction must be LONG, SHORT, or WAIT; never claim an order was executed.\n"
                 + snapshot.model_dump_json()
             ),
-            "generation_config": {"thinking_level": "low"},
+            "generation_config": {
+                "thinking_level": "low",
+                "max_output_tokens": 512,
+            },
             "response_format": {
                 "type": "text",
                 "mime_type": "application/json",

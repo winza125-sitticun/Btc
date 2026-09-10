@@ -21,7 +21,7 @@ def config() -> AIProviderRuntimeConfig:
 
 
 @pytest.mark.asyncio
-async def test_gemini_38_uses_stateless_interactions_structured_output_with_low_thinking():
+async def test_gemini_38_uses_stateless_interactions_structured_output_with_bounded_low_thinking():
     requests: list[httpx.Request] = []
     decision = {
         "symbol": "BTCUSDT",
@@ -44,7 +44,10 @@ async def test_gemini_38_uses_stateless_interactions_structured_output_with_low_
         body = json.loads(request.content)
         assert body["model"] == "gemini-3.8-flash"
         assert body["store"] is False
-        assert body["generation_config"] == {"thinking_level": "low"}
+        assert body["generation_config"] == {
+            "thinking_level": "low",
+            "max_output_tokens": 512,
+        }
         assert "Analyze this bounded crypto futures snapshot" in body["input"]
 
         response_format = body["response_format"]
