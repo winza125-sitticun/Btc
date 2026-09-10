@@ -77,7 +77,7 @@ def test_provider_health_never_expands_without_scanner_cycle_evidence():
         scanner_cycles=0,
     )
 
-    assert result.scanner_failure_rate is None
+    assert result.scanner_failure_rate == 0.0
     assert result.can_expand is False
     assert "no completed scanner cycles observed" in result.reasons
 

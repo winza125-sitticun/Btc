@@ -112,7 +112,9 @@ async def test_operational_health_uses_bounded_sanitized_queries_only():
         api_key="anon-key",
         transport=httpx.MockTransport(handler),
     ) as repo:
-        snapshot = await repo.operational_health("15m", 20)
+        snapshot = await repo.operational_health(
+            "15m", 20, provider="GEMINI", model="gemini-test"
+        )
 
     assert snapshot.attempts == 20
     assert snapshot.successes == 20
@@ -124,8 +126,70 @@ async def test_operational_health_uses_bounded_sanitized_queries_only():
     )
     assert "input_snapshot" not in analysis_request.url.params["select"]
     assert "error_message" not in analysis_request.url.params["select"]
+    assert analysis_request.url.params["provider"] == "eq.GEMINI"
+    assert analysis_request.url.params["model"] == "eq.gemini-test"
     assert scanner_request.url.params["select"] == "failure_count"
     assert scanner_request.url.params["limit"] == "20"
+
+
+@pytest.mark.asyncio
+async def test_operational_health_filters_to_the_requested_provider_and_model():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/market_ai_analyses"):
+            return httpx.Response(200, json=[])
+        if request.url.path.endswith("/market_scanner_runs"):
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected path: {request.url.path}")
+
+    async with SupabaseAIAnalysisRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="anon-key",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        await repo.operational_health("15m", 20, provider="CLAUDE", model="claude-test")
+
+    analysis_request = requests[0]
+    assert analysis_request.url.params["provider"] == "eq.CLAUDE"
+    assert analysis_request.url.params["model"] == "eq.claude-test"
+
+
+@pytest.mark.asyncio
+async def test_operational_health_derives_a_complete_pair_when_only_one_scope_value_is_set():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/market_ai_analyses"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "status": "SUCCESS",
+                        "error_code": None,
+                        "latency_ms": 100,
+                        "provider": "GEMINI",
+                        "model": "active-model",
+                        "timeframe": "15m",
+                        "created_at": "2026-09-10T00:00:00+00:00",
+                    }
+                ],
+            )
+        if request.url.path.endswith("/market_scanner_runs"):
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected path: {request.url.path}")
+
+    async with SupabaseAIAnalysisRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="anon-key",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        await repo.operational_health("15m", 20, provider="GEMINI")
+
+    assert requests[1].url.params["provider"] == "eq.GEMINI"
+    assert requests[1].url.params["model"] == "eq.active-model"
 
 
 @pytest.mark.asyncio

@@ -63,9 +63,18 @@ class FakeAIReader:
             }
         ]
 
-    async def operational_health(self, timeframe: str, window: int):
+    async def operational_health(
+        self,
+        timeframe: str,
+        window: int,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ):
         assert timeframe == "15m"
         assert window == 20
+        assert provider in {None, "GEMINI"}
+        assert model in {None, "gemini-test"}
         return {
             "attempts": 20,
             "successes": 19,
@@ -123,7 +132,9 @@ def test_latest_ai_analysis_endpoint_normalizes_timeframe_and_uses_safe_reader()
     assert "error_message" not in payload[0]
 
 
-def test_performance_health_endpoint_uses_bounded_read_only_ai_reader():
+def test_performance_health_endpoint_scopes_to_active_provider_and_model(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "gemini")
+    monkeypatch.setenv("AI_MODEL", "gemini-test")
     app.dependency_overrides[get_ai_reader] = lambda: FakeAIReader()
     try:
         response = client.get("/api/v1/performance/health?timeframe=%2015m%20&window=20")

@@ -21,7 +21,7 @@ class ProviderHealthSnapshot(BaseModel):
     invalid_response_rate: float = Field(ge=0, le=100)
     median_latency_ms: int | None = Field(default=None, ge=0)
     p95_latency_ms: int | None = Field(default=None, ge=0)
-    scanner_failure_rate: float | None = Field(default=None, ge=0, le=100)
+    scanner_failure_rate: float = Field(ge=0, le=100)
     status: Literal["INSUFFICIENT_SAMPLE", "HEALTHY", "DEGRADED"]
     can_expand: bool
     reasons: tuple[str, ...] = ()
@@ -63,7 +63,7 @@ def compute_provider_health(
 
     success_rate = (successes / attempts * 100) if attempts else 0.0
     invalid_response_rate = (invalid_responses / attempts * 100) if attempts else 0.0
-    scanner_failure_rate = (scanner_failures / scanner_cycles * 100) if scanner_cycles else None
+    scanner_failure_rate = (scanner_failures / scanner_cycles * 100) if scanner_cycles else 0.0
     median_latency_ms = _median(latencies_ms)
     p95_latency_ms = _p95(latencies_ms)
     reasons: list[str] = []
@@ -84,7 +84,7 @@ def compute_provider_health(
         reasons.append("no latency observations")
     elif p95_latency_ms > 10_000:
         reasons.append("p95 latency exceeds 10000 ms")
-    if scanner_failure_rate is not None and scanner_failure_rate != 0:
+    if scanner_failure_rate != 0:
         reasons.append("scanner failures observed")
     if scanner_cycles == 0:
         reasons.append("no completed scanner cycles observed")

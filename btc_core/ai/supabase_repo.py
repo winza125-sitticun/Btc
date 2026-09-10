@@ -150,12 +150,22 @@ class SupabaseAIAnalysisRepository:
         rows = response.json()
         return rows if isinstance(rows, list) else []
 
-    async def operational_health(self, timeframe: str, window: int) -> ProviderHealthSnapshot:
-        """Read a rolling 20-attempt, cross-provider timeframe health snapshot.
+    async def operational_health(
+        self,
+        timeframe: str,
+        window: int,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> ProviderHealthSnapshot:
+        """Read a rolling 20-attempt health snapshot for one provider/model.
 
         ``window`` controls the bounded PostgREST lookback (20--200 rows), but
         canary degradation is always computed from the newest 20 attempts and
         completed scanner cycles so older successes cannot mask a regression.
+        When the active provider/model is supplied, PostgREST filters both
+        columns. Calls without the optional values retain compatibility by
+        deriving the newest pair first, then issuing the same scoped query.
         """
         normalized = timeframe.strip()
         if not normalized:
@@ -163,16 +173,39 @@ class SupabaseAIAnalysisRepository:
         if not 20 <= window <= 200:
             raise ValueError("window must be between 20 and 200")
 
+        normalized_provider = provider.strip().upper() if provider else ""
+        normalized_model = model.strip() if model else ""
+        if not (normalized_provider and normalized_model):
+            normalized_provider = ""
+            normalized_model = ""
+        analysis_params: dict[str, str] = {
+            "select": _HEALTH_SELECT,
+            "timeframe": f"eq.{normalized}",
+            "order": "created_at.desc",
+            "limit": str(window),
+        }
+        if normalized_provider:
+            analysis_params["provider"] = f"eq.{normalized_provider}"
+            analysis_params["model"] = f"eq.{normalized_model}"
+
         analyses_response = await self._request(
             "GET",
             "/market_ai_analyses",
-            params={
-                "select": _HEALTH_SELECT,
-                "timeframe": f"eq.{normalized}",
-                "order": "created_at.desc",
-                "limit": str(window),
-            },
+            params=analysis_params,
         )
+        analysis_rows = analyses_response.json()
+        if not normalized_provider and not normalized_model and isinstance(analysis_rows, list):
+            latest_row = next((row for row in analysis_rows if isinstance(row, dict)), None)
+            if latest_row:
+                derived_provider = str(latest_row.get("provider") or "").strip().upper()
+                derived_model = str(latest_row.get("model") or "").strip()
+                if derived_provider and derived_model:
+                    analysis_params["provider"] = f"eq.{derived_provider}"
+                    analysis_params["model"] = f"eq.{derived_model}"
+                    analyses_response = await self._request(
+                        "GET", "/market_ai_analyses", params=analysis_params
+                    )
+                    analysis_rows = analyses_response.json()
         scanner_response = await self._request(
             "GET",
             "/market_scanner_runs",
@@ -184,7 +217,6 @@ class SupabaseAIAnalysisRepository:
                 "limit": str(window),
             },
         )
-        analysis_rows = analyses_response.json()
         scanner_rows = scanner_response.json()
         safe_analysis_rows = (
             analysis_rows[:_ROLLING_CANARY_ATTEMPTS] if isinstance(analysis_rows, list) else []
