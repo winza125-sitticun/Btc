@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -11,6 +11,12 @@ from .outcomes import OHLCBar, SignalOutcome
 
 class StrategyRepositoryError(RuntimeError):
     pass
+
+class PublicBinanceKlinesFetcher:
+    """Explicit adapter boundary for public Binance klines only."""
+    is_public_binance_klines = True
+    def __init__(self, fetch: Callable[..., Awaitable[list[OHLCBar]]]): self._fetch = fetch
+    async def __call__(self, symbol, timeframe, start, end, limit): return await self._fetch(symbol, timeframe, start, end, limit)
 
 
 class SupabaseStrategyRepository:
@@ -47,14 +53,28 @@ class SupabaseStrategyRepository:
         response = await self._request("GET", "/market_candles", params={"select": "symbol,timeframe,open_time,close_time,open,high,low,close,volume,quote_volume,trade_count,taker_buy_base_volume,taker_buy_quote_volume", "symbol": f"eq.{symbol.strip().upper()}", "timeframe": f"eq.{timeframe}", "open_time": f"gte.{start.isoformat()}", "close_time": f"lte.{end.isoformat()}", "order": "open_time.asc", "limit": str(limit)})
         rows = response.json(); return rows if isinstance(rows, list) else []
 
-    async def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, fallback: Callable[[str, str, datetime, datetime, int], Awaitable[list[OHLCBar]]] | None = None) -> list[OHLCBar]:
+    async def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, public_binance_klines: PublicBinanceKlinesFetcher | None = None, fallback: Callable[[str, str, datetime, datetime, int], Awaitable[list[OHLCBar]]] | None = None) -> list[OHLCBar]:
+        if fallback is not None:
+            if public_binance_klines is not None: raise ValueError("use public_binance_klines, not fallback")
+            if not getattr(fallback, "is_public_binance_klines", False): raise ValueError("fallback must be a public_binance klines callback")
+            public_binance_klines = fallback
+        if public_binance_klines is not None and not getattr(public_binance_klines, "is_public_binance_klines", False):
+            raise ValueError("public_binance_klines must be an approved public adapter")
         rows = await self.persisted_candles(symbol, timeframe, start, end)
-        coverage_complete = bool(rows) and str(rows[-1].get("close_time", "")) >= end.isoformat()
-        if coverage_complete or fallback is None: return [OHLCBar(timestamp=r["open_time"], open=r["open"], high=r["high"], low=r["low"], close=r["close"]) for r in rows]
-        if "private" in getattr(fallback, "__name__", "").lower() or "private" in getattr(fallback, "__module__", "").lower():
-            raise ValueError("fallback must be a public Binance klines callback")
-        result = await fallback(symbol.strip().upper(), timeframe, start, end, 1500)
+        interval = _interval_minutes(timeframe)
+        expected = max(1, int((end - start).total_seconds() // (interval * 60)))
+        observed = {str(r.get("open_time")) for r in rows}
+        required = { (start + timedelta(minutes=interval * i)).isoformat() for i in range(expected) }
+        coverage_complete = bool(rows) and required.issubset(observed)
+        if coverage_complete or public_binance_klines is None: return [OHLCBar(timestamp=r["open_time"], open=r["open"], high=r["high"], low=r["low"], close=r["close"]) for r in rows]
+        result = await public_binance_klines(symbol.strip().upper(), timeframe, start, end, 1500)
         if len(result) > 1500: raise StrategyRepositoryError("fallback candle response exceeded bound")
         return list(result)
 
     fetch_candles = candles
+
+def _interval_minutes(timeframe: str) -> int:
+    value = timeframe.strip().lower()
+    units = {"m": 1, "h": 60, "d": 1440}
+    if not value or value[-1] not in units or not value[:-1].isdigit(): raise ValueError("unsupported candle timeframe")
+    return int(value[:-1]) * units[value[-1]]

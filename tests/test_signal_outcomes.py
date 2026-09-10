@@ -64,3 +64,10 @@ def test_short_signed_excursions_and_long_horizons():
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     result = evaluate_signal_outcome(SignalSpec(direction="SHORT", entry_min=100, entry_max=100, stop=110, take_profits=(90,), signal_timestamp=start, horizon="4H"), (bar(start + timedelta(hours=1), high=105, low=95, close=100), bar(start + timedelta(hours=4), high=102, low=90, close=92)))
     assert result.mfe_percent == 10 and result.mae_percent == -5 and result.highest_tp_hit == 1
+
+def test_wait_and_exit_report_partial_or_missing_quality():
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    wait = SignalSpec(direction="WAIT", entry_min=100, entry_max=100, stop=95, signal_timestamp=start, horizon="24H")
+    exit_spec = wait.model_copy(update={"direction": "EXIT", "horizon": "4H"})
+    assert evaluate_signal_outcome(wait, (bar(start + timedelta(hours=1), high=101, low=99, close=100),)).data_quality == "PARTIAL"
+    assert evaluate_signal_outcome(exit_spec, ()).data_quality == "MISSING"
