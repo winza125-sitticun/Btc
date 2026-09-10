@@ -45,6 +45,7 @@ def test_full_risk_rejects_leverage_daily_loss_positions_and_event():
     ("risk_reward", -math.inf), ("requested_leverage", "5"),
     ("daily_realized_loss_percent", math.nan), ("balance", math.inf),
     ("equity", "10000"), ("open_positions", 1.5),
+    ("event_blocked", "blocked"), ("market_data_quality_ok", "false"),
 ])
 def test_full_risk_rejects_non_finite_or_non_numeric_context(field, value):
     result = evaluate_full_risk(context(**{field: value}), RiskPolicy())

@@ -13,6 +13,8 @@ no live execution or exchange submission path was added.
   — `23 passed in 0.18s` (including non-finite/non-numeric rejection tests).
 - Initial implementation commit SHA: `0540236ae804ae31261682e88c6d47c9417efb52`.
 - Review fix commit SHA: `50135f16d9f54e07eb6e5026fc908c6933746e69`.
+- Round 2 fix: event and data-quality flags now require strict `bool`/`None`
+  types; malformed strings fail closed. Focused suite: `25 passed in 0.27s`.
 
 ## Safety/concerns
 

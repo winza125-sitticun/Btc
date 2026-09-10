@@ -37,6 +37,10 @@ def _positive(value: float, name: str) -> None:
 
 
 def _context_is_valid(context: FullRiskContext) -> bool:
+    if context.event_blocked is not None and not isinstance(context.event_blocked, bool):
+        return False
+    if not isinstance(context.market_data_quality_ok, bool):
+        return False
     numeric = (
         context.confidence,
         context.opportunity_score,
