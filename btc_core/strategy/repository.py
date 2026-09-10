@@ -60,7 +60,7 @@ class SupabaseStrategyRepository:
     async def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, public_binance_klines: PublicBinanceKlinesFetcher | None = None, fallback: Callable[[str, str, datetime, datetime, int], Awaitable[list[OHLCBar]]] | None = None) -> list[OHLCBar]:
         if fallback is not None:
             raise ValueError("fallback callbacks are not supported; use public_binance_klines")
-        if public_binance_klines is not None and not isinstance(public_binance_klines, PublicBinanceKlinesFetcher):
+        if public_binance_klines is not None and type(public_binance_klines) is not PublicBinanceKlinesFetcher:
             raise ValueError("public_binance_klines must be an approved public adapter")
         rows = await self.persisted_candles(symbol, timeframe, start, end)
         interval = _interval_minutes(timeframe)

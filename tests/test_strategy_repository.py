@@ -61,3 +61,17 @@ async def test_untrusted_fallback_callback_is_rejected():
     async with SupabaseStrategyRepository(supabase_url="https://x.supabase.co", api_key="service", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[]))) as repo:
         with pytest.raises(ValueError, match="public_binance"):
             await repo.candles("BTCUSDT", "1m", start, start, fallback=private_fetch)
+
+@pytest.mark.asyncio
+async def test_subclass_override_cannot_bypass_public_adapter_boundary():
+    invoked = False
+    class PrivateAdapter(PublicBinanceKlinesFetcher):
+        async def __call__(self, *args):
+            nonlocal invoked
+            invoked = True
+            return []
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    async with SupabaseStrategyRepository(supabase_url="https://x.supabase.co", api_key="service", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[]))) as repo:
+        with pytest.raises(ValueError, match="approved public adapter"):
+            await repo.candles("BTCUSDT", "1m", start, start, public_binance_klines=PrivateAdapter())
+    assert invoked is False
