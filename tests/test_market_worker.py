@@ -6,7 +6,7 @@ from btc_core.ai.models import Direction
 from btc_core.market.realtime import RealtimeMarketEvent
 from btc_core.market.scanner import MarketScanResult, MarketScannerCandidate
 from btc_core.scanner.scoring import OpportunityInputs
-from services.market_worker.app.main import run_realtime_cycle
+from services.market_worker.app.main import _env_flag, run_realtime_cycle
 
 
 def make_candidate(symbol: str, timeframe: str) -> MarketScannerCandidate:
@@ -75,6 +75,18 @@ class FakeRealtime:
             index_price=62090,
             funding_rate=0.0001,
         )
+
+
+def test_news_enrichment_feature_flag_defaults_off(monkeypatch):
+    monkeypatch.delenv("NEWS_ENRICHMENT_V1_ENABLED", raising=False)
+    assert _env_flag("NEWS_ENRICHMENT_V1_ENABLED", False) is False
+
+    for enabled_value in ("true", "1", "on", "yes", " TRUE "):
+        monkeypatch.setenv("NEWS_ENRICHMENT_V1_ENABLED", enabled_value)
+        assert _env_flag("NEWS_ENRICHMENT_V1_ENABLED", False) is True
+
+    monkeypatch.setenv("NEWS_ENRICHMENT_V1_ENABLED", "false")
+    assert _env_flag("NEWS_ENRICHMENT_V1_ENABLED", False) is False
 
 
 @pytest.mark.asyncio

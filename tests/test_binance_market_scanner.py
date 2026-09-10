@@ -62,6 +62,19 @@ class FakeMarketClient:
         )
 
 
+class FakeNewsScoreProvider:
+    def __init__(self, score: float = 80.0, *, fail: bool = False):
+        self.value = score
+        self.fail = fail
+        self.calls: list[str] = []
+
+    async def score(self, symbol: str) -> float:
+        self.calls.append(symbol)
+        if self.fail:
+            raise RuntimeError("news unavailable")
+        return self.value
+
+
 @pytest.mark.asyncio
 async def test_scanner_uses_top_volume_universe_and_isolates_symbol_failures():
     client = FakeMarketClient()
@@ -75,3 +88,45 @@ async def test_scanner_uses_top_volume_universe_and_isolates_symbol_failures():
     assert "temporary market data failure" in result.failures[0].reason
     assert result.candidates[0].rank == 1
     assert result.candidates[0].quote_volume_24h == 900_000_000
+
+
+@pytest.mark.asyncio
+async def test_news_enrichment_changes_score_not_direction():
+    baseline = await BinanceOpportunityScanner(
+        client=FakeMarketClient(),
+        concurrency=2,
+    ).scan(timeframe="15m", universe_limit=2, candidate_limit=5)
+    provider = FakeNewsScoreProvider(80.0)
+    enriched = await BinanceOpportunityScanner(
+        client=FakeMarketClient(),
+        concurrency=2,
+        news_score_provider=provider,
+    ).scan(timeframe="15m", universe_limit=2, candidate_limit=5)
+
+    base_candidate = baseline.candidates[0]
+    enriched_candidate = enriched.candidates[0]
+
+    assert provider.calls == ["SOLUSDT"]
+    assert enriched_candidate.direction == base_candidate.direction
+    assert enriched_candidate.directional_signal == base_candidate.directional_signal
+    assert enriched_candidate.components.news == 80.0
+    assert enriched_candidate.opportunity_score == round(base_candidate.opportunity_score + 3.0, 2)
+    assert enriched_candidate.market_only is False
+    assert enriched.enrichment_status == "NEWS_V1"
+
+
+@pytest.mark.asyncio
+async def test_news_enrichment_failure_falls_back_to_market_only_candidate():
+    provider = FakeNewsScoreProvider(fail=True)
+    result = await BinanceOpportunityScanner(
+        client=FakeMarketClient(),
+        concurrency=2,
+        news_score_provider=provider,
+    ).scan(timeframe="15m", universe_limit=2, candidate_limit=5)
+
+    assert provider.calls == ["SOLUSDT"]
+    assert [candidate.symbol for candidate in result.candidates] == ["SOLUSDT"]
+    assert result.candidates[0].components.news == 50.0
+    assert result.candidates[0].market_only is True
+    assert len(result.failures) == 1
+    assert result.failures[0].symbol == "BTCUSDT"

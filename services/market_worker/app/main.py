@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 import os
 import time
 
@@ -8,6 +9,8 @@ from btc_core.market.binance_usdm import BinanceUsdMClient
 from btc_core.market.realtime import BinanceUsdMRealtimeClient, LiveMarketAggregator
 from btc_core.market.scanner import BinanceOpportunityScanner, MarketScanResult
 from btc_core.market.supabase_repo import SupabaseMarketRepository
+from btc_core.news.enrichment import RecentNewsScoreProvider
+from btc_core.news.supabase_repo import SupabaseNewsRepository
 
 
 CORE_REALTIME_SYMBOLS = ("BTCUSDT", "SOLUSDT", "XRPUSDT", "ETHUSDT")
@@ -23,6 +26,13 @@ def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> 
     raw = os.getenv(name)
     value = default if raw is None else float(raw)
     return max(minimum, min(maximum, value))
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _select_realtime_symbols(candidates, realtime_symbol_limit: int) -> list[str]:
@@ -104,12 +114,32 @@ async def run_forever() -> None:
     realtime_seconds = _env_float("SCANNER_INTERVAL_SECONDS", 300.0, minimum=30.0, maximum=3600.0)
     flush_interval = _env_float("REALTIME_FLUSH_SECONDS", 3.0, minimum=1.0, maximum=60.0)
     retry_delay = _env_float("WORKER_RETRY_SECONDS", 10.0, minimum=1.0, maximum=300.0)
+    news_enrichment_enabled = _env_flag("NEWS_ENRICHMENT_V1_ENABLED", False)
 
-    async with BinanceUsdMClient() as client, SupabaseMarketRepository(
-        supabase_url=supabase_url,
-        api_key=service_role_key,
-    ) as repo:
-        scanner = BinanceOpportunityScanner(client=client, concurrency=concurrency)
+    async with AsyncExitStack() as stack:
+        client = await stack.enter_async_context(BinanceUsdMClient())
+        repo = await stack.enter_async_context(
+            SupabaseMarketRepository(
+                supabase_url=supabase_url,
+                api_key=service_role_key,
+            )
+        )
+
+        news_score_provider = None
+        if news_enrichment_enabled:
+            news_repo = await stack.enter_async_context(
+                SupabaseNewsRepository(
+                    supabase_url=supabase_url,
+                    api_key=service_role_key,
+                )
+            )
+            news_score_provider = RecentNewsScoreProvider(repo=news_repo)
+
+        scanner = BinanceOpportunityScanner(
+            client=client,
+            concurrency=concurrency,
+            news_score_provider=news_score_provider,
+        )
         realtime = BinanceUsdMRealtimeClient()
         while True:
             try:
@@ -127,7 +157,7 @@ async def run_forever() -> None:
                 print(
                     f"scanner cycle complete timeframe={result.timeframe} "
                     f"universe={result.universe_size} candidates={len(result.candidates)} "
-                    f"failures={len(result.failures)}"
+                    f"failures={len(result.failures)} enrichment={result.enrichment_status}"
                 )
             except asyncio.CancelledError:
                 raise

@@ -8,13 +8,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from btc_core.ai.models import Direction
 from btc_core.market.features import build_market_feature_result
 from btc_core.market.models import MarketSnapshot, MarketSymbol, Ticker24h
-from btc_core.scanner.scoring import OpportunityInputs
+from btc_core.scanner.scoring import OpportunityInputs, calculate_opportunity_score
 
 
 class MarketClientProtocol(Protocol):
     async def list_usdt_perpetuals(self) -> list[MarketSymbol]: ...
     async def ticker_24h(self) -> list[Ticker24h]: ...
     async def market_snapshot(self, symbol: str, timeframe: str, *, candle_limit: int = 60) -> MarketSnapshot: ...
+
+
+class NewsScoreProviderProtocol(Protocol):
+    async def score(self, symbol: str) -> float: ...
 
 
 class MarketScannerCandidate(BaseModel):
@@ -54,7 +58,14 @@ class MarketScanResult(BaseModel):
 
 
 class BinanceOpportunityScanner:
-    def __init__(self, *, client: MarketClientProtocol, concurrency: int = 5, candle_limit: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        client: MarketClientProtocol,
+        concurrency: int = 5,
+        candle_limit: int = 60,
+        news_score_provider: NewsScoreProviderProtocol | None = None,
+    ) -> None:
         if not 1 <= concurrency <= 20:
             raise ValueError("concurrency must be between 1 and 20")
         if candle_limit < 20:
@@ -62,6 +73,7 @@ class BinanceOpportunityScanner:
         self._client = client
         self._concurrency = concurrency
         self._candle_limit = candle_limit
+        self._news_score_provider = news_score_provider
 
     async def scan(self, *, timeframe: str = "15m", universe_limit: int = 30, candidate_limit: int = 10) -> MarketScanResult:
         if not 1 <= universe_limit <= 200:
@@ -92,21 +104,36 @@ class BinanceOpportunityScanner:
                         candle_limit=self._candle_limit,
                     )
                     features = build_market_feature_result(snapshot)
+
+                    components = features.inputs
+                    opportunity_score = features.opportunity_score
+                    market_only = True
+                    if self._news_score_provider is not None:
+                        try:
+                            news_score = float(await self._news_score_provider.score(ticker.symbol))
+                            news_score = max(0.0, min(100.0, news_score))
+                            components = features.inputs.model_copy(update={"news": news_score})
+                            opportunity_score = calculate_opportunity_score(components)
+                            market_only = False
+                        except Exception:
+                            pass
+
                     return (
                         MarketScannerCandidate(
                             rank=1,
                             symbol=ticker.symbol,
                             timeframe=timeframe,
                             direction=features.direction,
-                            opportunity_score=features.opportunity_score,
+                            opportunity_score=opportunity_score,
                             directional_signal=features.directional_signal,
-                            components=features.inputs,
+                            components=components,
                             last_price=snapshot.mark_price,
                             quote_volume_24h=ticker.quote_volume,
                             funding_rate=snapshot.funding_rate,
                             open_interest_change_percent=snapshot.open_interest_change_percent,
                             long_short_ratio=snapshot.long_short_ratio,
                             spread_percent=snapshot.spread_percent,
+                            market_only=market_only,
                         ),
                         None,
                     )
@@ -125,4 +152,7 @@ class BinanceOpportunityScanner:
             universe_size=len(ranked_tickers),
             candidates=candidates,
             failures=failures,
+            enrichment_status=(
+                "NEWS_V1" if self._news_score_provider is not None else "MARKET_ONLY"
+            ),
         )

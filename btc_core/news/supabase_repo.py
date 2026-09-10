@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from btc_core.news.enrichment import NewsScoreStory
 from btc_core.news.models import EnrichedNewsArticle, NewsSourceClass, RecentNewsStory
 
 
@@ -111,6 +112,54 @@ class SupabaseNewsRepository:
                         published_at=row["published_at"],
                         symbols=symbols,
                         source_class=source_class,
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return stories
+
+    async def recent_asset_news(
+        self,
+        symbol: str,
+        since: datetime,
+        until: datetime,
+        limit: int = 50,
+    ) -> list[NewsScoreStory]:
+        normalized_symbol = symbol.strip().upper()
+        if not normalized_symbol:
+            return []
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+
+        response = await self._request(
+            "GET",
+            "/news_articles",
+            params=[
+                (
+                    "select",
+                    "published_at,impact_level,credibility_score,news_assets!inner(symbol)",
+                ),
+                ("news_assets.symbol", f"eq.{normalized_symbol}"),
+                ("published_at", f"gte.{since.isoformat()}"),
+                ("published_at", f"lte.{until.isoformat()}"),
+                ("order", "published_at.desc"),
+                ("limit", str(limit)),
+            ],
+        )
+        rows = response.json()
+        if not isinstance(rows, list):
+            return []
+
+        stories: list[NewsScoreStory] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                stories.append(
+                    NewsScoreStory(
+                        published_at=row["published_at"],
+                        impact_level=row["impact_level"],
+                        credibility_score=row["credibility_score"],
                     )
                 )
             except (KeyError, TypeError, ValueError):
