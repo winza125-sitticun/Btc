@@ -7,6 +7,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from btc_core.ai.models import AIProvider, Direction
+from btc_core.strategy.health import ProviderHealthSnapshot, compute_provider_health
 
 
 _SAFE_SELECT = (
@@ -15,6 +16,7 @@ _SAFE_SELECT = (
     "reason_summary,status,risk_precheck_status,risk_precheck_reasons,latency_ms,"
     "attempt_count,error_code,created_at,completed_at"
 )
+_HEALTH_SELECT = "status,error_code,latency_ms,provider,model,timeframe,created_at"
 _SECRET_KEYS = {
     "authorization",
     "api_key",
@@ -146,3 +148,65 @@ class SupabaseAIAnalysisRepository:
         )
         rows = response.json()
         return rows if isinstance(rows, list) else []
+
+    async def operational_health(self, timeframe: str, window: int) -> ProviderHealthSnapshot:
+        """Read bounded, non-secret operational evidence for one scanner timeframe."""
+        normalized = timeframe.strip()
+        if not normalized:
+            raise ValueError("timeframe is required")
+        if not 20 <= window <= 200:
+            raise ValueError("window must be between 20 and 200")
+
+        analyses_response = await self._request(
+            "GET",
+            "/market_ai_analyses",
+            params={
+                "select": _HEALTH_SELECT,
+                "timeframe": f"eq.{normalized}",
+                "order": "created_at.desc",
+                "limit": str(window),
+            },
+        )
+        scanner_response = await self._request(
+            "GET",
+            "/market_scanner_runs",
+            params={
+                "select": "failure_count",
+                "timeframe": f"eq.{normalized}",
+                "completed_at": "not.is.null",
+                "order": "completed_at.desc",
+                "limit": str(window),
+            },
+        )
+        analysis_rows = analyses_response.json()
+        scanner_rows = scanner_response.json()
+        safe_analysis_rows = analysis_rows if isinstance(analysis_rows, list) else []
+        safe_scanner_rows = scanner_rows if isinstance(scanner_rows, list) else []
+        latencies = [
+            int(row["latency_ms"])
+            for row in safe_analysis_rows
+            if isinstance(row, dict) and isinstance(row.get("latency_ms"), int) and row["latency_ms"] >= 0
+        ]
+        scanner_failures = sum(
+            int(row["failure_count"])
+            for row in safe_scanner_rows
+            if isinstance(row, dict)
+            and isinstance(row.get("failure_count"), int)
+            and row["failure_count"] >= 0
+        )
+        return compute_provider_health(
+            attempts=len(safe_analysis_rows),
+            successes=sum(
+                1
+                for row in safe_analysis_rows
+                if isinstance(row, dict) and row.get("status") == "SUCCESS"
+            ),
+            invalid_responses=sum(
+                1
+                for row in safe_analysis_rows
+                if isinstance(row, dict) and row.get("status") == "INVALID_RESPONSE"
+            ),
+            latencies_ms=latencies,
+            scanner_failures=scanner_failures,
+            scanner_cycles=len(safe_scanner_rows),
+        )

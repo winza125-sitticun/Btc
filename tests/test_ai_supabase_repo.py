@@ -80,3 +80,60 @@ async def test_ai_latest_selects_explicit_safe_columns_only():
     assert "error_message" not in params["select"]
     assert "scanner_candidate_id" in params["select"]
     assert "risk_precheck_status" in params["select"]
+
+
+@pytest.mark.asyncio
+async def test_operational_health_uses_bounded_sanitized_queries_only():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/market_ai_analyses"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "status": "SUCCESS",
+                        "error_code": None,
+                        "latency_ms": 2200,
+                        "provider": "GEMINI",
+                        "model": "gemini-test",
+                        "timeframe": "15m",
+                        "created_at": "2026-09-10T00:00:00+00:00",
+                    }
+                ] * 20,
+            )
+        if request.url.path.endswith("/market_scanner_runs"):
+            return httpx.Response(200, json=[{"failure_count": 0}] * 20)
+        raise AssertionError(f"unexpected path: {request.url.path}")
+
+    async with SupabaseAIAnalysisRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="anon-key",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        snapshot = await repo.operational_health("15m", 20)
+
+    assert snapshot.attempts == 20
+    assert snapshot.successes == 20
+    assert snapshot.can_expand is True
+    analysis_request, scanner_request = requests
+    assert analysis_request.url.params["limit"] == "20"
+    assert analysis_request.url.params["select"] == (
+        "status,error_code,latency_ms,provider,model,timeframe,created_at"
+    )
+    assert "input_snapshot" not in analysis_request.url.params["select"]
+    assert "error_message" not in analysis_request.url.params["select"]
+    assert scanner_request.url.params["select"] == "failure_count"
+    assert scanner_request.url.params["limit"] == "20"
+
+
+@pytest.mark.asyncio
+async def test_operational_health_rejects_an_unbounded_window():
+    async with SupabaseAIAnalysisRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="anon-key",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[])),
+    ) as repo:
+        with pytest.raises(ValueError, match="between 20 and 200"):
+            await repo.operational_health("15m", 201)

@@ -18,6 +18,7 @@ class MarketReader(Protocol):
 
 class AIReader(Protocol):
     async def latest(self, timeframe: str, limit: int) -> list[dict[str, Any]]: ...
+    async def operational_health(self, timeframe: str, window: int) -> Any: ...
 
 
 app = FastAPI(title="BTC AI Futures API", version="0.3.0")
@@ -123,3 +124,13 @@ async def latest_ai_analyses(
     limit: int = Query(default=10, ge=1, le=50),
 ) -> list[dict[str, Any]]:
     return await reader.latest(timeframe.strip(), limit)
+
+
+@app.get("/api/v1/performance/health")
+async def performance_health(
+    reader: Annotated[AIReader, Depends(get_ai_reader)],
+    timeframe: str = Query(default="15m", min_length=2, max_length=8),
+    window: int = Query(default=20, ge=20, le=200),
+) -> Any:
+    """Return bounded, read-only provider and scanner canary evidence."""
+    return await reader.operational_health(timeframe.strip(), window)
