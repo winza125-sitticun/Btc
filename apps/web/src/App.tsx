@@ -42,7 +42,12 @@ function analysisForCandidate(
   latest: Record<string, AIAnalysis>,
 ) {
   const analysis = latest[candidate.symbol]
-  if (!analysis || analysis.timeframe !== candidate.timeframe) return undefined
+  if (
+    !analysis
+    || analysis.scanner_candidate_id !== candidate.id
+    || analysis.run_id !== candidate.run_id
+    || analysis.timeframe !== candidate.timeframe
+  ) return undefined
   return analysis
 }
 
@@ -151,7 +156,7 @@ export default function App() {
         const price = realtime?.mark_price ?? candidate.last_price
         const analysis = analysisForCandidate(candidate, latestAIBySymbol)
         return (
-          <article className="candidate" key={candidate.symbol}>
+          <article className="candidate" key={candidate.id}>
             <div className="rank">#{candidate.rank}</div>
             <div className="grow">
               <strong>{candidate.symbol}</strong>
@@ -222,7 +227,7 @@ export default function App() {
               {candidates.slice(0, 6).map((candidate) => {
                 const analysis = analysisForCandidate(candidate, latestAIBySymbol)
                 return (
-                  <article className="detail-card" key={`detail-${candidate.symbol}`}>
+                  <article className="detail-card" key={`detail-${candidate.id}`}>
                     <div className="detail-head"><strong>{candidate.symbol}</strong><span className={`signal ${candidate.direction.toLowerCase()}`}>{candidate.direction}</span></div>
                     <dl>
                       <div><dt>24h volume</dt><dd>${formatCompact(candidate.quote_volume_24h)}</dd></div>
