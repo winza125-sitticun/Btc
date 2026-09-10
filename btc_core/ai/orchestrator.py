@@ -114,6 +114,7 @@ class AIAnalysisRunner:
             except AIProviderError as exc:
                 elapsed = max(0, int((time.monotonic() - started) * 1000))
                 invalid = exc.code in {"INVALID_JSON", "INVALID_SCHEMA"}
+                diagnostic = f", status={exc.status_code}" if exc.status_code is not None else ""
                 record = self._base_record(
                     candidate,
                     persisted,
@@ -123,7 +124,7 @@ class AIAnalysisRunner:
                     latency_ms=elapsed,
                     attempt_count=1,
                     error_code=exc.code,
-                    error_message=f"AI provider failure ({exc.code})",
+                    error_message=f"AI provider failure ({exc.code}{diagnostic})",
                 )
                 await self._persist(record)
                 return "failed"
