@@ -1,4 +1,6 @@
 export type ScannerCandidate = {
+  id: number
+  run_id: string
   rank: number
   symbol: string
   timeframe: string
