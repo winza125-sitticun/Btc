@@ -122,6 +122,7 @@ class SupabaseNewsRepository:
         self,
         symbol: str,
         since: datetime,
+        until: datetime,
         limit: int = 50,
     ) -> list[NewsScoreStory]:
         normalized_symbol = symbol.strip().upper()
@@ -133,13 +134,17 @@ class SupabaseNewsRepository:
         response = await self._request(
             "GET",
             "/news_articles",
-            params={
-                "select": "published_at,impact_level,credibility_score,news_assets!inner(symbol)",
-                "news_assets.symbol": f"eq.{normalized_symbol}",
-                "published_at": f"gte.{since.isoformat()}",
-                "order": "published_at.desc",
-                "limit": str(limit),
-            },
+            params=[
+                (
+                    "select",
+                    "published_at,impact_level,credibility_score,news_assets!inner(symbol)",
+                ),
+                ("news_assets.symbol", f"eq.{normalized_symbol}"),
+                ("published_at", f"gte.{since.isoformat()}"),
+                ("published_at", f"lte.{until.isoformat()}"),
+                ("order", "published_at.desc"),
+                ("limit", str(limit)),
+            ],
         )
         rows = response.json()
         if not isinstance(rows, list):
