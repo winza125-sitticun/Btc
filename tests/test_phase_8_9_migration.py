@@ -51,7 +51,7 @@ def test_phase_8_9_migration_has_safety_indexes_and_sanitized_read_grants():
         assert index_name in sql
 
     assert "for select to anon, authenticated" in sql
-    assert "grant select on public.market_strategy_metrics to anon, authenticated" in sql
+    assert "grant select (id, provider, model, timeframe, direction, symbol, rolling_window" in sql
     assert "grant insert" not in sql
     assert "grant update" not in sql
     assert "grant delete" not in sql
@@ -63,3 +63,24 @@ def test_phase_8_9_migration_seeds_the_system_canary_account():
     assert "'production canary'" in sql
     assert "1000" in sql
     assert "on conflict (name) do nothing" in sql
+
+
+def test_phase_8_9_migration_exposes_only_sanitized_read_columns():
+    """Full-row grants would expose worker-owned arbitrary JSONB documents."""
+    sql = MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "grant select on public.market_alert_events" not in sql
+    assert "grant select on public.market_readiness_checks" not in sql
+    assert "grant select on public.market_order_intents" not in sql
+    assert "grant select (id, alert_type, severity, symbol, ai_analysis_id, scanner_run_id, title, short_summary, dedupe_key, first_observed_at, last_observed_at, status, created_at, updated_at)" in sql
+    assert "grant select (id, overall_status, blocking_reasons, created_at)" in sql
+    assert "grant select (id, simulation_trade_id, ai_analysis_id, mode, symbol, side, quantity, leverage, entry_type, entry_price, stop_loss, validation_status, rejection_reasons, exchange_submission_allowed, created_at, updated_at)" in sql
+    assert "grant select on public.market_strategy_experiments" not in sql
+
+
+def test_phase_8_9_migration_records_when_a_trade_actually_expires():
+    """The entry deadline alone must not be mistaken for an expiration event."""
+    sql = MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "expires_at timestamptz not null" in sql
+    assert "expired_at timestamptz" in sql

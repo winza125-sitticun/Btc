@@ -66,3 +66,39 @@ RLS, index, idempotency, dry-run, grant, and canary-seed SQL fragments.
 - `market_strategy_experiments` is service-role-only: it has RLS and no
   client-read policy because proposed configuration changes should not become a
   public operational surface.
+
+## Review fix round 1
+
+### Changes
+
+- Replaced all full-row browser `SELECT` grants with explicit column-level
+  grants. Public reads now exclude arbitrary worker-owned JSONB documents such
+  as alert `payload`/`delivery_state`, readiness evidence snapshots, order risk
+  snapshots and take-profit instructions, and experiment variant
+  configurations. `market_strategy_experiments` remains service-role-only and
+  has neither a public policy nor a public grant.
+- Added `expired_at timestamptz` to `market_simulation_trades`. `expires_at`
+  remains the entry deadline, while `expired_at` records the actual transition
+  to `EXPIRED`.
+- Added regression coverage that rejects full-row grants for alerts, readiness
+  snapshots, and order intents, verifies the sanitized grants, and requires the
+  actual expiration timestamp.
+
+### TDD evidence
+
+Regression tests were written first. RED command:
+
+```powershell
+& 'C:\Users\q739\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pytest -q tests/test_phase_8_9_migration.py
+```
+
+RED output: `2 failed, 4 passed`; the failures identified the unsafe full-row
+`market_alert_events` grant and missing `expired_at` timestamp.
+
+GREEN verification:
+
+```powershell
+& 'C:\Users\q739\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pytest -q tests/test_phase_8_9_migration.py tests/test_ai_migration.py tests/test_news_migration.py
+```
+
+GREEN output: `9 passed in 0.24s`.

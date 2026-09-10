@@ -71,6 +71,7 @@ create table if not exists public.market_simulation_trades (
   opened_at timestamptz,
   closed_at timestamptz,
   expires_at timestamptz not null,
+  expired_at timestamptz,
   exit_reason text,
   full_risk_approved boolean not null default false,
   full_risk_reasons text[] not null default '{}',
@@ -235,13 +236,13 @@ revoke all on public.market_strategy_experiments from anon, authenticated;
 revoke all on public.market_alert_events from anon, authenticated;
 revoke all on public.market_readiness_checks from anon, authenticated;
 revoke all on public.market_order_intents from anon, authenticated;
-grant select on public.market_ai_signal_outcomes to anon, authenticated;
-grant select on public.market_simulation_accounts to anon, authenticated;
-grant select on public.market_simulation_trades to anon, authenticated;
-grant select on public.market_strategy_metrics to anon, authenticated;
-grant select on public.market_alert_events to anon, authenticated;
-grant select on public.market_readiness_checks to anon, authenticated;
-grant select on public.market_order_intents to anon, authenticated;
+grant select (id, ai_analysis_id, scanner_candidate_id, symbol, timeframe, direction, horizon, signal_created_at, evaluation_due_at, entry_reference, entry_touched, stop_touched, highest_tp_hit, mfe_percent, mae_percent, final_return_percent, outcome, data_quality, evaluated_at, created_at) on public.market_ai_signal_outcomes to anon, authenticated;
+grant select (id, name, currency, starting_balance, balance, equity, realized_pnl, max_equity, max_drawdown_percent, daily_realized_loss, trading_date, created_at, updated_at) on public.market_simulation_accounts to anon, authenticated;
+grant select (id, account_id, ai_analysis_id, scanner_candidate_id, symbol, side, status, planned_entry_min, planned_entry_max, simulated_entry_price, quantity, leverage, risk_amount, stop_loss, highest_tp_reached, fees_paid, slippage_cost, funding_paid, funding_quality, realized_pnl, realized_return_percent, opened_at, closed_at, expires_at, expired_at, exit_reason, full_risk_approved, created_at, updated_at) on public.market_simulation_trades to anon, authenticated;
+grant select (id, provider, model, timeframe, direction, symbol, rolling_window, window_started_at, window_ended_at, analysis_count, eligible_signal_count, simulated_trade_count, no_fill_count, win_count, loss_count, win_rate, average_net_return, median_net_return, expectancy, profit_factor, max_drawdown_percent, average_mfe_percent, average_mae_percent, tp1_hit_rate, tp2_hit_rate, tp3_hit_rate, sl_hit_rate, provider_success_rate, median_latency_ms, p95_latency_ms, full_data_count, partial_data_count, created_at) on public.market_strategy_metrics to anon, authenticated;
+grant select (id, alert_type, severity, symbol, ai_analysis_id, scanner_run_id, title, short_summary, dedupe_key, first_observed_at, last_observed_at, status, created_at, updated_at) on public.market_alert_events to anon, authenticated;
+grant select (id, overall_status, blocking_reasons, created_at) on public.market_readiness_checks to anon, authenticated;
+grant select (id, simulation_trade_id, ai_analysis_id, mode, symbol, side, quantity, leverage, entry_type, entry_price, stop_loss, validation_status, rejection_reasons, exchange_submission_allowed, created_at, updated_at) on public.market_order_intents to anon, authenticated;
 
 insert into public.market_simulation_accounts (
   name, currency, starting_balance, balance, equity, realized_pnl, max_equity, max_drawdown_percent, daily_realized_loss
