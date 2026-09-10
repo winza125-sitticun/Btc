@@ -75,3 +75,31 @@ async def test_fetch_atom_uses_updated_timestamp():
     article = normalize_article(result.entries[0])
     assert article.title == "Ethereum upgrade released"
     assert article.published_at.isoformat() == "2026-09-08T08:05:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_fetch_follows_http_redirect_to_feed():
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        if str(request.url) == "https://feed.example/rss":
+            return httpx.Response(
+                301,
+                headers={"Location": "https://feed.example/en/rss.xml"},
+            )
+        if str(request.url) == "https://feed.example/en/rss.xml":
+            return httpx.Response(200, content=RSS_XML)
+        return httpx.Response(404)
+
+    client = NewsFeedClient(transport=httpx.MockTransport(handler))
+    try:
+        result = await client.fetch(_source("https://feed.example/rss"))
+    finally:
+        await client.aclose()
+
+    assert len(result.entries) == 1
+    assert seen_urls == [
+        "https://feed.example/rss",
+        "https://feed.example/en/rss.xml",
+    ]
