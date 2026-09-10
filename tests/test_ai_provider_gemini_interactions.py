@@ -15,11 +15,13 @@ def config() -> AIProviderRuntimeConfig:
         model="gemini-3.8-flash",
         api_key="gemini-secret",
         base_url="https://generativelanguage.googleapis.com/v1beta",
+        timeout_seconds=60,
+        max_retries=0,
     )
 
 
 @pytest.mark.asyncio
-async def test_gemini_38_uses_plain_generate_content_first_and_validates_result():
+async def test_gemini_38_uses_stateless_interactions_structured_output_with_low_thinking():
     requests: list[httpx.Request] = []
     decision = {
         "symbol": "BTCUSDT",
@@ -36,22 +38,42 @@ async def test_gemini_38_uses_plain_generate_content_first_and_validates_result(
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        assert request.url.path == "/v1beta/interactions"
+        assert request.headers["x-goog-api-key"] == "gemini-secret"
+
         body = json.loads(request.content)
-        assert request.url.path.endswith("/models/gemini-3.8-flash:generateContent")
-        assert "generationConfig" not in body
-        assert "Return exactly one JSON object" in body["contents"][0]["parts"][0]["text"]
+        assert body["model"] == "gemini-3.8-flash"
+        assert body["store"] is False
+        assert body["generation_config"] == {"thinking_level": "low"}
+        assert "Analyze this bounded crypto futures snapshot" in body["input"]
+
+        response_format = body["response_format"]
+        assert response_format["type"] == "text"
+        assert response_format["mime_type"] == "application/json"
+        schema = response_format["schema"]
+        assert schema["type"] == "object"
+        assert "provider" not in schema["properties"]
+        assert "model" not in schema["properties"]
+        assert "provider" not in schema.get("required", [])
+        assert "model" not in schema.get("required", [])
+        assert "direction" in schema["properties"]
+
         return httpx.Response(
             200,
             json={
-                "candidates": [
+                "id": "int_test",
+                "status": "completed",
+                "steps": [
                     {
-                        "content": {
-                            "parts": [
-                                {"text": "```json\n" + json.dumps(decision) + "\n```"}
-                            ]
-                        }
+                        "type": "model_output",
+                        "status": "done",
+                        "content": [
+                            {"type": "text", "text": json.dumps(decision)}
+                        ],
                     }
-                ]
+                ],
+                "object": "interaction",
+                "model": "gemini-3.8-flash",
             },
         )
 
@@ -62,3 +84,4 @@ async def test_gemini_38_uses_plain_generate_content_first_and_validates_result(
     assert result.provider is AIProvider.GEMINI
     assert result.model == "gemini-3.8-flash"
     assert result.direction is Direction.LONG
+    assert result.confidence == 84
