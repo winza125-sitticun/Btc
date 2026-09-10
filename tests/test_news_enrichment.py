@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
+import httpx
+import pytest
+
 
 def test_news_score_uses_impact_credibility_and_recency_with_neutral_baseline():
     from btc_core.news.enrichment import NewsScoreStory, calculate_news_score
@@ -53,3 +56,70 @@ def test_news_score_caps_at_100():
     ]
 
     assert calculate_news_score(stories, now=now) == 100.0
+
+
+@pytest.mark.asyncio
+async def test_recent_news_score_provider_uses_24_hour_window():
+    from btc_core.news.enrichment import NewsScoreStory, RecentNewsScoreProvider
+    from btc_core.news.models import NewsImpactLevel
+
+    now = datetime(2026, 9, 10, 3, 0, tzinfo=timezone.utc)
+
+    class FakeRepo:
+        def __init__(self):
+            self.calls = []
+
+        async def recent_asset_news(self, symbol, since, limit=50):
+            self.calls.append((symbol, since, limit))
+            return [
+                NewsScoreStory(
+                    published_at=now,
+                    impact_level=NewsImpactLevel.HIGH,
+                    credibility_score=100,
+                )
+            ]
+
+    repo = FakeRepo()
+    provider = RecentNewsScoreProvider(repo=repo, now_factory=lambda: now)
+
+    assert await provider.score("btcusdt") == 62.0
+    assert repo.calls == [("BTCUSDT", now - timedelta(hours=24), 50)]
+
+
+@pytest.mark.asyncio
+async def test_supabase_recent_asset_news_filters_symbol_and_window():
+    from btc_core.news.models import NewsImpactLevel
+    from btc_core.news.supabase_repo import SupabaseNewsRepository
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "published_at": "2026-09-10T02:30:00+00:00",
+                    "impact_level": "HIGH",
+                    "credibility_score": 95,
+                    "news_assets": [{"symbol": "BTCUSDT"}],
+                }
+            ],
+        )
+
+    since = datetime(2026, 9, 9, 3, 0, tzinfo=timezone.utc)
+    async with SupabaseNewsRepository(
+        supabase_url="https://project.supabase.co",
+        api_key="secret",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        stories = await repo.recent_asset_news("btcusdt", since, limit=50)
+
+    assert len(stories) == 1
+    assert stories[0].impact_level is NewsImpactLevel.HIGH
+    assert stories[0].credibility_score == 95
+    params = dict(requests[0].url.params)
+    assert params["news_assets.symbol"] == "eq.BTCUSDT"
+    assert params["published_at"] == f"gte.{since.isoformat()}"
+    assert params["order"] == "published_at.desc"
+    assert params["limit"] == "50"
