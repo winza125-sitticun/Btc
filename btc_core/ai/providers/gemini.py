@@ -181,6 +181,20 @@ class GeminiProviderClient:
 
     async def analyze(self, snapshot: AIAnalysisSnapshot) -> AIDecision:
         path = f"models/{self.config.model}:generateContent"
+        if self.config.model.startswith("gemini-3.8-"):
+            response = await request_with_retry(
+                self._client,
+                "POST",
+                path,
+                max_retries=self.config.max_retries,
+                json=self._request_payload(
+                    snapshot,
+                    include_schema=False,
+                    include_response_format=False,
+                ),
+            )
+            return self._parse_response(response)
+
         try:
             response = await request_with_retry(
                 self._client,
