@@ -62,6 +62,22 @@ def _normalize_gemini_json_schema(value: Any) -> Any:
     return normalized
 
 
+def _decode_gemini_json_text(text: str) -> Any:
+    stripped = text.strip()
+    try:
+        return json.loads(stripped)
+    except ValueError as initial_exc:
+        if stripped.count("```") != 2:
+            raise initial_exc
+        if stripped.startswith("```json\n") and stripped.endswith("\n```"):
+            inner = stripped[len("```json\n") : -len("\n```")]
+        elif stripped.startswith("```\n") and stripped.endswith("\n```"):
+            inner = stripped[len("```\n") : -len("\n```")]
+        else:
+            raise initial_exc
+        return json.loads(inner.strip())
+
+
 class GeminiProviderClient:
     def __init__(
         self,
@@ -146,7 +162,7 @@ class GeminiProviderClient:
         if len(text_parts) != 1 or not text_parts[0].strip():
             raise AIProviderError("Gemini response must contain one JSON text part", code="INVALID_SCHEMA")
         try:
-            data = json.loads(text_parts[0])
+            data = _decode_gemini_json_text(text_parts[0])
         except ValueError as exc:
             raise AIProviderError("Gemini returned invalid JSON content", code="INVALID_JSON") from exc
         if not isinstance(data, dict):
