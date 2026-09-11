@@ -98,9 +98,9 @@ class SupabaseStrategyRepository:
 
     async def upsert_strategy_metrics(self, metrics: StrategyMetrics) -> None:
         """Persist a sanitized metrics snapshot; no analysis payloads are sent."""
-        payload = metrics.model_dump(mode="json")
+        payload = metrics.model_dump(mode="json", exclude_none=True)
         for key in ("provider", "model", "timeframe", "direction", "symbol"):
-            if payload[key] is None:
+            if payload.get(key) is None:
                 payload[key] = ""
         await self._request("POST", "/market_strategy_metrics", params={"on_conflict": "provider,model,timeframe,direction,symbol,rolling_window,window_ended_at"}, headers={"Prefer": "resolution=merge-duplicates,return=minimal"}, json=payload)
 

@@ -90,3 +90,4 @@ async def test_metrics_upsert_uses_literal_unique_dimensions_and_normalizes_null
         await repo.upsert_strategy_metrics(metrics)
     assert requests[0].url.params["on_conflict"] == "provider,model,timeframe,direction,symbol,rolling_window,window_ended_at"
     assert all(requests[0].content.decode().count('"'+key+'":""') == 1 for key in ("provider", "model", "timeframe", "direction", "symbol"))
+    assert '"provider":null' not in requests[0].content.decode()
