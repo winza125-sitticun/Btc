@@ -48,8 +48,8 @@ def test_entry_fee_slippage_and_equal_tp_ladder_then_sl():
     t0 = trade.signal_created_at
     engine.process([bar(t0 + timedelta(minutes=15), 101, 101),
                     bar(t0 + timedelta(minutes=30), 104, 106),
-                    bar(t0 + timedelta(minutes=45), 109, 111),
-                    bar(t0 + timedelta(minutes=60), 90, 116)])
+                    bar(t0 + timedelta(minutes=45), 109, 110),
+                    bar(t0 + timedelta(minutes=60), 90, 112)])
     assert trade.status is TradeStatus.SL_EXIT
     assert trade.highest_tp_reached == 2
     assert trade.fills == 4

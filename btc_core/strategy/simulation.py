@@ -88,6 +88,9 @@ class PaperTrade:
     opened_at: datetime | None = None
     closed_at: datetime | None = None
     expired_at: datetime | None = None
+    accounted_costs: float = 0.0
+    accounted_funding: float = 0.0
+    funding_timestamps: set[datetime] = field(default_factory=set)
 
     def __post_init__(self): self.remaining_quantity = self.setup.quantity
     @property
@@ -133,30 +136,43 @@ class PaperTradeEngine:
                     self._fill_cost(trade, trade.simulated_entry_price, setup.quantity)
                     self._funding(trade, funding, candle.timestamp)
             if trade.status is TradeStatus.OPEN:
+                self._funding(trade, funding, candle.timestamp)
                 sl_hit = candle.low <= setup.stop_loss if long else candle.high >= setup.stop_loss
                 tps = sorted(set(setup.take_profits), reverse=not long)
                 tp_hit = next((i + 1 for i, tp in enumerate(tps) if (candle.high >= tp if long else candle.low <= tp) and i + 1 > trade.highest_tp_reached), None)
                 if sl_hit: self._exit(trade, setup.stop_loss, trade.remaining_quantity, TradeStatus.SL_EXIT, candle.timestamp); return
                 if tp_hit:
-                    qty = setup.quantity / len(tps)
-                    self._exit(trade, tps[tp_hit - 1], min(qty, trade.remaining_quantity), TradeStatus.TP_EXIT if tp_hit == len(tps) else TradeStatus.OPEN, candle.timestamp)
-                    trade.highest_tp_reached = tp_hit
-                    if trade.remaining_quantity <= 1e-12: trade.status = TradeStatus.TP_EXIT; return
+                    for level in range(trade.highest_tp_reached, len(tps)):
+                        touched = candle.high >= tps[level] if long else candle.low <= tps[level]
+                        if not touched:
+                            break
+                        qty = min(setup.quantity / len(tps), trade.remaining_quantity)
+                        self._exit(trade, tps[level], qty, TradeStatus.TP_EXIT if level == len(tps) - 1 else TradeStatus.OPEN, candle.timestamp)
+                        trade.highest_tp_reached = level + 1
+                        if trade.remaining_quantity <= 1e-12: return
 
     def _fill_cost(self, trade, price, qty):
         notional = price * qty; trade.fees_paid += notional * self.FEE_RATE; trade.slippage_cost += notional * self.SLIPPAGE_RATE; trade.fills += 1
 
     def _funding(self, trade, observations, at):
-        obs = [o for o in observations if o.timestamp <= at]
-        if not obs: trade.funding_quality = "PARTIAL"; return
-        rate = obs[-1].rate; direction = 1 if trade.setup.side == "LONG" else -1
-        trade.funding_paid += trade.simulated_entry_price * trade.setup.quantity * rate * direction; trade.funding_quality = "FULL"
+        if trade.opened_at is None: return
+        obs = [o for o in observations if trade.opened_at < o.timestamp <= at and o.timestamp not in trade.funding_timestamps]
+        if not obs:
+            if not any(o.timestamp > trade.opened_at for o in observations): trade.funding_quality = "PARTIAL"
+            return
+        direction = 1 if trade.setup.side == "LONG" else -1
+        for observation in obs:
+            trade.funding_paid += trade.simulated_entry_price * trade.remaining_quantity * observation.rate * direction
+            trade.funding_timestamps.add(observation.timestamp)
+        trade.funding_quality = "FULL"
 
     def _exit(self, trade, price, qty, status, at):
         long = trade.setup.side == "LONG"; effective = price * (1 - self.SLIPPAGE_RATE if long else 1 + self.SLIPPAGE_RATE)
         gross = (effective - trade.simulated_entry_price) * qty * (1 if long else -1)
-        self._fill_cost(trade, effective, qty); fee = effective * qty * self.FEE_RATE
-        trade.realized_pnl += gross - fee - effective * qty * self.SLIPPAGE_RATE
+        self._fill_cost(trade, effective, qty)
+        trade.realized_pnl += gross
         trade.remaining_quantity -= qty; trade.status = status; trade.closed_at = at
-        if trade.remaining_quantity <= 1e-12:
-            trade.realized_pnl -= trade.funding_paid; self.account.reconcile(trade.realized_pnl)
+        costs = trade.fees_paid + trade.slippage_cost
+        net = trade.realized_pnl - trade.accounted_costs - (trade.funding_paid - trade.accounted_funding)
+        trade.accounted_costs, trade.accounted_funding = costs, trade.funding_paid
+        self.account.reconcile(net)
