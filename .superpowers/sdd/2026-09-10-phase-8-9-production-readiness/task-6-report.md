@@ -13,9 +13,9 @@ Focused test command:
 python -m pytest tests/test_strategy_worker.py tests/test_strategy_worker_dockerfile.py -q
 ```
 
-Result: not runnable in the execution environment because no Python executable
-is installed. `git diff --check` passed. The focused suite must be rerun in CI
-or a Python 3.12 environment.
+Result: `7 passed in 1.11s`; `git diff --check` passed.
 
 Commits: `5096064d8b5b143e70e9df9a58ff99a9ea3652f8` (base implementation),
-`7b789b5` (review fixes and report).
+`02c51c20be29115757a66df65539172c1e82293e` (review fixes),
+`01335a14d079a01e9ae1a573120c0034924774b4` (Railway contract and focused-test
+fixes).
