@@ -52,6 +52,25 @@ class SupabaseStrategyRepository:
         payload = {"ai_analysis_id": analysis_id, "scanner_candidate_id": scanner_candidate_id, "symbol": symbol.strip().upper(), "timeframe": timeframe, "direction": direction, "horizon": horizon, "signal_created_at": signal_created_at.isoformat(), "evaluation_due_at": evaluation_due_at.isoformat(), "entry_reference": entry_reference, **outcome.model_dump(), "evaluated_at": datetime.now().astimezone().isoformat()}
         await self._request("POST", "/market_ai_signal_outcomes", params={"on_conflict": "ai_analysis_id,horizon"}, headers={"Prefer": "resolution=merge-duplicates,return=minimal"}, json=payload)
 
+    async def create_pending_trade(self, *, account_id: str, trade: dict[str, Any], idempotency_key: str) -> dict[str, Any]:
+        """Persist a worker-owned paper trade; replaying a key is harmless."""
+        if not account_id or not idempotency_key:
+            raise ValueError("account_id and idempotency_key are required")
+        payload = {**trade, "account_id": account_id, "status": "PENDING_ENTRY"}
+        response = await self._request("POST", "/market_simulation_trades", params={"on_conflict": "ai_analysis_id"}, headers={"Prefer": "resolution=merge-duplicates,return=representation"}, json=payload)
+        rows = response.json()
+        return rows[0] if isinstance(rows, list) and rows else {}
+
+    async def update_trade(self, *, trade_id: int, changes: dict[str, Any], idempotency_key: str) -> None:
+        if trade_id <= 0 or not idempotency_key:
+            raise ValueError("trade_id and idempotency_key are required")
+        await self._request("PATCH", f"/market_simulation_trades?id=eq.{trade_id}", headers={"Prefer": "return=minimal", "X-Idempotency-Key": idempotency_key}, json=changes)
+
+    async def reconcile_account(self, *, account_id: str, changes: dict[str, Any], idempotency_key: str) -> None:
+        if not account_id or not idempotency_key:
+            raise ValueError("account_id and idempotency_key are required")
+        await self._request("PATCH", f"/market_simulation_accounts?id=eq.{account_id}", headers={"Prefer": "return=minimal", "X-Idempotency-Key": idempotency_key}, json=changes)
+
     async def persisted_candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, limit: int = 1500) -> list[dict[str, Any]]:
         if not 1 <= limit <= 1500: raise ValueError("limit must be between 1 and 1500")
         response = await self._request("GET", "/market_candles", params={"select": "symbol,timeframe,open_time,close_time,open,high,low,close,volume,quote_volume,trade_count,taker_buy_base_volume,taker_buy_quote_volume", "symbol": f"eq.{symbol.strip().upper()}", "timeframe": f"eq.{timeframe}", "open_time": f"gte.{start.isoformat()}", "close_time": f"lte.{end.isoformat()}", "order": "open_time.asc", "limit": str(limit)})
