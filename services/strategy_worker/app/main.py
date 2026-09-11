@@ -20,6 +20,17 @@ def _seconds(name: str, default: int) -> int:
         return default
 
 
+def _cycle_seconds() -> int:
+    raw = os.getenv("STRATEGY_CYCLE_SECONDS", "60")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("STRATEGY_CYCLE_SECONDS must be an integer") from exc
+    if not 30 <= value <= 300:
+        raise ValueError("STRATEGY_CYCLE_SECONDS must be between 30 and 300")
+    return value
+
+
 @dataclass(frozen=True)
 class WorkerConfig:
     enabled: bool = False
@@ -38,7 +49,7 @@ def load_worker_config() -> WorkerConfig:
         enabled=_flag("STRATEGY_WORKER_ENABLED"),
         outcome_evaluation_enabled=_flag("OUTCOME_EVALUATION_ENABLED"),
         simulation_engine_enabled=_flag("SIMULATION_ENGINE_ENABLED"),
-        cycle_seconds=_seconds("STRATEGY_CYCLE_SECONDS", 60),
+        cycle_seconds=_cycle_seconds(),
         target_risk_percent=float(os.getenv("SIM_TARGET_RISK_PERCENT", "0.5")),
         taker_fee_bps=float(os.getenv("SIM_TAKER_FEE_BPS", "5")),
         slippage_bps=float(os.getenv("SIM_SLIPPAGE_BPS", "2")),
@@ -76,7 +87,7 @@ class StrategyWorker:
     async def _call(self, name: str, *args):
         method = getattr(self.repository, name, None)
         if method is None:
-            return None
+            raise NotImplementedError(f"repository stage is not implemented: {name}")
         value = method(*args)
         return await value if inspect.isawaitable(value) else value
 

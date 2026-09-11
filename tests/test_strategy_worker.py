@@ -77,3 +77,24 @@ def test_worker_defaults_are_safe(monkeypatch):
     assert config.live_order_execution_enabled is False
     assert config.cycle_seconds == 60
 
+
+def test_cycle_seconds_rejects_invalid_or_out_of_range_values(monkeypatch):
+    import pytest
+    for value in ("not-an-int", "29", "301"):
+        monkeypatch.setenv("STRATEGY_CYCLE_SECONDS", value)
+        with pytest.raises(ValueError):
+            load_worker_config()
+
+
+def test_enabled_missing_stage_is_an_explicit_error_and_later_stages_run():
+    class PartialRepository:
+        async def reconcile_account(self):
+            events.append("reconcile_account")
+
+    events = []
+    result = asyncio.run(StrategyWorker(
+        repository=PartialRepository(), market_client=object(), enabled=True,
+        outcome_evaluation_enabled=True, simulation_engine_enabled=True,
+    ).run_cycle())
+    assert ("finalize_due_outcomes", "NotImplementedError") in result.errors
+    assert events == ["reconcile_account"]
