@@ -5,6 +5,7 @@ import pytest
 from btc_core.strategy.outcomes import SignalOutcome
 from btc_core.strategy.repository import PublicBinanceKlinesFetcher, SupabaseStrategyRepository
 from btc_core.strategy.metrics import StrategyMetrics
+from btc_core.strategy.alerts import AlertEngine, AlertType
 
 
 @pytest.mark.asyncio
@@ -91,3 +92,25 @@ async def test_metrics_upsert_uses_literal_unique_dimensions_and_normalizes_null
     assert requests[0].url.params["on_conflict"] == "provider,model,timeframe,direction,symbol,rolling_window,window_ended_at"
     assert all(requests[0].content.decode().count('"'+key+'":""') == 1 for key in ("provider", "model", "timeframe", "direction", "symbol"))
     assert '"provider":null' not in requests[0].content.decode()
+
+
+@pytest.mark.asyncio
+async def test_alert_repository_filter_removes_nested_auth_fields():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        return httpx.Response(201, json=[{"id": 9}])
+    event = AlertEngine().observe(
+        alert_type=AlertType.HIGH_IMPACT_NEWS,
+        dedupe_key="news:repository-filter",
+        title="News",
+        short_summary="summary",
+        payload={"safe": {"value": 3}, "auth_header": "secret", "oauth_token": "secret", 1: {"password": "secret"}},
+    )
+    async with SupabaseStrategyRepository(supabase_url="https://x.supabase.co", api_key="service", transport=httpx.MockTransport(handler)) as repo:
+        await repo.upsert_alert_event(event)
+    body = requests[-1].content.decode()
+    assert "auth_header" not in body and "oauth_token" not in body and "password" not in body
+    assert '"safe":{"value":3}' in body
