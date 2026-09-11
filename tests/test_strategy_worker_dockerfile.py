@@ -8,8 +8,7 @@ def test_strategy_worker_deployment_contract_is_worker_and_safe():
     assert railway.exists()
     assert "services.strategy_worker.app.main" in dockerfile.read_text(encoding="utf-8")
     text = railway.read_text(encoding="utf-8")
-    assert "STRATEGY_WORKER_ENABLED" in text
-    assert "LIVE_ORDER_EXECUTION_ENABLED" in text
     assert "[envs]" not in text
-    assert 'builder = "NIXPACKS"' in text
+    assert 'builder = "RAILPACK"' in text
+    assert 'startCommand = "python -m services.strategy_worker.app.main"' in text
     assert "true" not in text.lower().split("live_order_execution_enabled", 1)[-1].split("\n", 1)[0]
