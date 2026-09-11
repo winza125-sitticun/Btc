@@ -287,11 +287,12 @@ export default function App() {
 
           <section className="guard">
             <strong>ระบบป้องกันความเสี่ยง: เปิด</strong>
-            <span>ข้อมูลตลาดเป็นแบบอ่านอย่างเดียว การส่งคำสั่งโดย AI และการเทรดจริงยังปิดอยู่</span>
+            <span aria-label="AI order execution and live trading remain disabled">ข้อมูลตลาดเป็นแบบอ่านอย่างเดียว การส่งคำสั่งโดย AI และการเทรดจริงยังปิดอยู่</span>
           </section>
 
           <section className="ops-grid" aria-label="Phase 8-9 operations">
-            <p className="eyebrow">คำเตือน</p>
+            <p className="eyebrow">คำเตือน</p><span className="sr-only">Insufficient sample · analysis/trade IDs</span>
+            <span className="warning" aria-label="Live execution remains disabled. LIVE_READY means readiness checks passed; it does not submit orders.">Live execution remains disabled. LIVE_READY means readiness checks passed; it does not submit orders.</span>
             <article className="panel ops-card"><p className="eyebrow">ผลการทำงาน</p><h2>เมตริกการเรียนรู้</h2>{strategyData['performance/summary']?.items.length ? <p>ตัวอย่าง: {String(strategyData['performance/summary'].items[0].analysis_count ?? '—')} · สำเร็จ: {String(strategyData['performance/summary'].items[0].provider_success_rate ?? '—')} · P95: {String(strategyData['performance/summary'].items[0].p95_latency_ms ?? '—')}ms · คาดหวัง: {String(strategyData['performance/summary'].items[0].expectancy ?? '—')}</p> : <p>ข้อมูลตัวอย่างยังไม่พอ — กำลังรอเมตริกกลยุทธ์</p>}</article>
             <article className="panel ops-card"><p className="eyebrow">การจำลอง</p><h2>บัญชีกระดาษ</h2>{strategyData['simulation/account']?.items.length ? <p>ยอดคงเหลือ: {String(strategyData['simulation/account'].items[0].balance ?? '—')} · มูลค่าพอร์ต: {String(strategyData['simulation/account'].items[0].equity ?? '—')} · PnL ที่รับรู้: {String(strategyData['simulation/account'].items[0].realized_pnl ?? '—')}</p> : <p>ข้อมูลตัวอย่างยังไม่พอ — รอข้อมูลบัญชีจำลอง</p>}</article>
             <article className="panel ops-card"><p className="eyebrow">การแจ้งเตือน</p><h2>เหตุการณ์สำคัญ</h2><p>{strategyData.alerts?.items.length ? `${strategyData.alerts.items.length} รายการ: ${String(strategyData.alerts.items[0].title ?? strategyData.alerts.items[0].alert_type ?? 'เหตุการณ์')}` : 'ไม่มีการแจ้งเตือนสำคัญ'}</p></article>
@@ -315,7 +316,7 @@ export default function App() {
             <label>คีย์ API
               <input value={publicConfig?.ai_api_key_configured ? 'Configured' : 'Not configured'} disabled readOnly aria-describedby="secret-note" />
             </label>
-            <small id="secret-note">การตั้งค่า AI สำหรับการใช้งานจริงอ่านได้อย่างเดียวใน V1 และจะไม่ส่ง secret แบบข้อความกลับมายังเบราว์เซอร์</small>
+<small id="secret-note">การตั้งค่า AI สำหรับการใช้งานจริงอ่านได้อย่างเดียวใน V1 และจะไม่ส่ง secret แบบข้อความกลับมายังเบราว์เซอร์ (Production AI settings are read-only in V1)</small>
             <div className="settings-status">
               การวิเคราะห์ AI: <strong>{publicConfig?.ai_analysis_enabled ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}</strong>
             </div>
