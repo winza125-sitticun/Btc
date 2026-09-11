@@ -18,4 +18,4 @@ Result: `7 passed in 1.11s`; `git diff --check` passed.
 Commits: `5096064d8b5b143e70e9df9a58ff99a9ea3652f8` (base implementation),
 `02c51c20be29115757a66df65539172c1e82293e` (review fixes),
 `01335a14d079a01e9ae1a573120c0034924774b4` (Railway contract and focused-test
-fixes).
+fixes), `6667df019dbf0a4ec7f0cecb68cb9c66f0fafeb0` (safety-contract test fix).
