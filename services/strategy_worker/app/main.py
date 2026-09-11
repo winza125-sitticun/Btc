@@ -83,7 +83,8 @@ class StrategyWorker:
                  simulation_engine_enabled: bool = False,
                  live_order_execution_enabled: bool = False,
                  alerts_enabled: bool = False,
-                 readiness_enabled: bool = False) -> None:
+                 readiness_enabled: bool = False,
+                 order_intent_dry_run_enabled: bool = False) -> None:
         if live_order_execution_enabled:
             raise ValueError("live order execution is prohibited for strategy worker")
         self.repository = repository
@@ -93,7 +94,7 @@ class StrategyWorker:
         self.simulation_engine_enabled = simulation_engine_enabled
         self.alerts_enabled = alerts_enabled
         self.readiness_enabled = readiness_enabled
-        self.order_intent_dry_run_enabled = _flag("ORDER_INTENT_DRY_RUN_ENABLED")
+        self.order_intent_dry_run_enabled = order_intent_dry_run_enabled
 
     async def _call(self, name: str, *args):
         method = getattr(self.repository, name, None)
@@ -146,7 +147,8 @@ async def run_forever() -> None:
                                  outcome_evaluation_enabled=config.outcome_evaluation_enabled,
                                  simulation_engine_enabled=config.simulation_engine_enabled,
                                  alerts_enabled=config.alerts_enabled,
-                                 readiness_enabled=config.readiness_enabled)
+                                 readiness_enabled=config.readiness_enabled,
+                                 order_intent_dry_run_enabled=config.order_intent_dry_run_enabled)
         try:
             while True:
                 result = await worker.run_cycle()

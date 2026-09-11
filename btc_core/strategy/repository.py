@@ -236,6 +236,7 @@ class SupabaseStrategyRepository:
         return payload
 
     create_order_intent = upsert_order_intent
+    persist_order_intent = upsert_order_intent
 
     async def read_order_intents(self, *, limit: int = 100) -> list[dict[str, Any]]:
         if not 1 <= limit <= 500:
@@ -243,6 +244,8 @@ class SupabaseStrategyRepository:
         response = await self._request("GET", "/market_order_intents", params={"select": "id,idempotency_key,ai_analysis_id,symbol,side,quantity,leverage,entry_min,entry_max,stop_loss,take_profits,risk_evidence,mode,exchange_submission_allowed,created_at", "order": "created_at.desc", "limit": str(limit)})
         rows = response.json()
         return rows if isinstance(rows, list) else []
+
+    list_order_intents = read_order_intents
 
     async def evaluate_readiness(self, evidence: ReadinessEvidence | dict[str, Any] | None = None) -> ReadinessSnapshot:
         """Evaluate and append readiness evidence supplied by the worker coordinator."""
