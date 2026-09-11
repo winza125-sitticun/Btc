@@ -208,3 +208,16 @@ python -m services.market_worker.app.main
 The worker rescans the highest-volume USDⓈ-M perpetuals, stores the ranking, then tracks selected candidates through Binance realtime streams. Book ticker data uses Binance `/public`; mark price and kline data use `/market`, matching the 2026 WebSocket migration.
 
 For Railway, keep the API and market worker as separate services. Set `VITE_API_BASE_URL` on the web build to the Railway API origin. Apply and verify the AI migration before enabling `AI_ANALYSIS_V1_ENABLED=true`.
+
+## Development workflow
+
+GitHub Spec Kit is the authoritative workflow for new features and bug fixes in this repository. Read `.specify/memory/constitution.md` first, then use the active artifacts under `specs/` or `.specify/bugs/`.
+
+- Feature flow: `specify -> clarify -> plan -> tasks -> analyze -> implement -> converge -> PR -> CI -> merge`
+- Bug flow: `bug.assess -> bug.fix -> bug.test -> PR -> CI -> merge`
+- Codex entry point: `AGENTS.md`
+- GitHub Copilot entry point: `.github/copilot-instructions.md`
+- Full guide: `docs/SPEC_KIT_WORKFLOW.md`
+- Bootstrap: `bash scripts/bootstrap-speckit.sh`
+
+Historical `.superpowers/sdd/` reports are retained as legacy evidence; new authoritative specs belong in Spec Kit.
