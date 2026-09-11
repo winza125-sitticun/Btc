@@ -4,6 +4,8 @@ import {
   fetchLatestCandidates,
   fetchLiveStates,
   fetchPublicConfig,
+  fetchStrategy,
+  type StrategyPage,
   type AIAnalysis,
   type LiveMarketState,
   type PublicConfig,
@@ -62,6 +64,7 @@ export default function App() {
   const [aiError, setAiError] = useState('')
   const [scannerLoading, setScannerLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  const [strategyData, setStrategyData] = useState<Record<string, StrategyPage | null>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -133,6 +136,20 @@ export default function App() {
     }
     void refreshConfig()
     const timer = window.setInterval(refreshConfig, 30_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const resources = ['performance/summary', 'simulation/account', 'alerts', 'readiness', 'order-intents']
+    async function refreshStrategy() {
+      const entries = await Promise.all(resources.map(async (resource) => {
+        try { return [resource, await fetchStrategy(resource)] as const } catch { return [resource, null] as const }
+      }))
+      if (!cancelled) setStrategyData(Object.fromEntries(entries))
+    }
+    void refreshStrategy()
+    const timer = window.setInterval(refreshStrategy, 30_000)
     return () => { cancelled = true; window.clearInterval(timer) }
   }, [])
 
@@ -271,6 +288,14 @@ export default function App() {
           <section className="guard">
             <strong>Risk Guard: ON</strong>
             <span>Realtime market data is read-only. AI order execution and live trading remain disabled.</span>
+          </section>
+
+          <section className="ops-grid" aria-label="Phase 8-9 operations">
+            <article className="panel ops-card"><p className="eyebrow">PERFORMANCE</p><h2>Learning metrics</h2>{strategyData['performance/summary']?.items.length ? <p>Samples: {String(strategyData['performance/summary'].items[0].analysis_count ?? '—')} · Success: {String(strategyData['performance/summary'].items[0].provider_success_rate ?? '—')} · P95: {String(strategyData['performance/summary'].items[0].p95_latency_ms ?? '—')}ms · Expectancy: {String(strategyData['performance/summary'].items[0].expectancy ?? '—')}</p> : <p>Insufficient sample — waiting for strategy metrics.</p>}</article>
+            <article className="panel ops-card"><p className="eyebrow">SIMULATION</p><h2>Paper account</h2>{strategyData['simulation/account']?.items.length ? <p>Balance: {String(strategyData['simulation/account'].items[0].balance ?? '—')} · Equity: {String(strategyData['simulation/account'].items[0].equity ?? '—')} · Realized PnL: {String(strategyData['simulation/account'].items[0].realized_pnl ?? '—')}</p> : <p>Insufficient sample — simulation account data pending.</p>}</article>
+            <article className="panel ops-card"><p className="eyebrow">ALERTS</p><h2>Material alerts</h2><p>{strategyData.alerts?.items.length ? `${strategyData.alerts.items.length} persisted alert(s): ${String(strategyData.alerts.items[0].title ?? strategyData.alerts.items[0].alert_type ?? 'material event')}` : 'No material alerts.'}</p></article>
+            <article className="panel ops-card"><p className="eyebrow">READINESS</p><h2>{String((strategyData.readiness?.items[0]?.overall_status ?? 'NOT_READY'))}</h2><p>States: NOT_READY · PAPER_READY · LIVE_READY · BLOCKED</p><p>{strategyData.readiness?.items.length ? `Blocking reasons: ${String(strategyData.readiness.items[0].blocking_reasons ?? 'none')}` : 'Insufficient sample — readiness evidence pending.'}</p><p className="warning">Live execution remains disabled. LIVE_READY means readiness checks passed; it does not submit orders.</p></article>
+            <article className="panel ops-card"><p className="eyebrow">ORDER INTENTS</p><h2>DRY_RUN</h2><span className="mode-badge">DRY RUN — NOT SUBMITTED</span><p>{strategyData['order-intents']?.items.length ? `${strategyData['order-intents'].items.length} read-only intent(s), associated by analysis/trade IDs; first analysis ID ${String(strategyData['order-intents'].items[0].ai_analysis_id ?? '—')} / trade ID ${String(strategyData['order-intents'].items[0].simulation_trade_id ?? '—')}.` : 'Insufficient sample — no intents yet.'}</p></article>
           </section>
         </main>
       ) : (

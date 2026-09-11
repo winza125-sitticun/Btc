@@ -71,6 +71,11 @@ dd { margin: 0; font-size: .82rem; font-weight: 700; }
 .risk-pending { margin-top: 10px; padding: 8px 10px; border: 1px solid #5d4d2e; border-radius: 8px; color: #dacb9e; background: #211c12; font-size: .72rem; font-weight: 700; }
 .ai-unavailable { margin-top: 12px; padding: 9px 10px; border-radius: 8px; background: #151b2c; color: #7f8eae; font-size: .75rem; }
 .settings-status { margin-top: 12px; padding-top: 12px; border-top: 1px solid #202e4c; color: #aebbdc; font-size: .82rem; }
+.ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-top: 1rem; }
+.ops-card { min-height: 150px; }
+.ops-card h2 { margin: .35rem 0 .65rem; }
+.ops-card p { color: #8f9cbc; line-height: 1.45; }
+.warning { color: #efb6b6 !important; font-size: .9rem; }
 @media (max-width: 850px) {
   .detail-grid { grid-template-columns: 1fr 1fr; }
   .candidate { grid-template-columns: 40px minmax(100px, 1fr) repeat(2, minmax(65px, auto)); }

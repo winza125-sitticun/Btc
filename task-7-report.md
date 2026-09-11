@@ -1,0 +1,16 @@
+# Task 7 implementation report
+
+Implemented strategy metrics and simulation-only experiment registry.
+
+- Added `btc_core/strategy/metrics.py` with bounded rolling `24H`, `7D`, `30D`, and `ALL` aggregation, quality-aware outcome statistics, drawdown, TP/SL rates, and provider latency/success metrics.
+- Added `btc_core/strategy/experiments.py` with an immutable lifecycle (`DRAFT -> SIMULATION -> PROMOTABLE|REJECTED -> ARCHIVED`) and an explicit guard against production configuration mutation.
+- Added repository upsert/read methods for sanitized metrics and experiment records.
+- Added focused contract tests in `tests/test_strategy_metrics.py` and `tests/test_strategy_experiments.py`.
+
+Verification: bundled Python focused tests passed: `10 passed` for `tests/test_strategy_metrics.py`, `tests/test_strategy_experiments.py`, and `tests/test_strategy_repository.py`; `git diff --check` passed.
+
+Implementation commit SHA: `9a9e34a0001ab815eb1717c53d38edc56046fe83`.
+Review-fix commit SHA: `a85a7157a496a8fc8203ddd5ba32f5fb8a03bfd5`.
+Conflict-upgrade migration commit SHA: `d484e2f4606d7a35ab171e340eb820b062dfb8e1`.
+NULL-normalization/NOT NULL hardening commit SHA: `d0c4109f8ef18c24666c20f57fe206cc25aef214`.
+Payload normalization/request-contract commit SHA: `108582a659cf6d3fb5bd2ff4371a5cf5d8a1cc7e`.

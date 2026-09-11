@@ -7,6 +7,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from btc_core.ai.models import AIProvider, Direction
+from btc_core.strategy.health import ProviderHealthSnapshot, compute_provider_health
 
 
 _SAFE_SELECT = (
@@ -15,6 +16,8 @@ _SAFE_SELECT = (
     "reason_summary,status,risk_precheck_status,risk_precheck_reasons,latency_ms,"
     "attempt_count,error_code,created_at,completed_at"
 )
+_HEALTH_SELECT = "status,error_code,latency_ms,provider,model,timeframe,created_at"
+_ROLLING_CANARY_ATTEMPTS = 20
 _SECRET_KEYS = {
     "authorization",
     "api_key",
@@ -146,3 +149,106 @@ class SupabaseAIAnalysisRepository:
         )
         rows = response.json()
         return rows if isinstance(rows, list) else []
+
+    async def operational_health(
+        self,
+        timeframe: str,
+        window: int,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> ProviderHealthSnapshot:
+        """Read a rolling 20-attempt health snapshot for one provider/model.
+
+        ``window`` controls the bounded PostgREST lookback (20--200 rows), but
+        canary degradation is always computed from the newest 20 attempts and
+        completed scanner cycles so older successes cannot mask a regression.
+        When the active provider/model is supplied, PostgREST filters both
+        columns. Calls without the optional values retain compatibility by
+        deriving the newest pair first, then issuing the same scoped query.
+        """
+        normalized = timeframe.strip()
+        if not normalized:
+            raise ValueError("timeframe is required")
+        if not 20 <= window <= 200:
+            raise ValueError("window must be between 20 and 200")
+
+        normalized_provider = provider.strip().upper() if provider else ""
+        normalized_model = model.strip() if model else ""
+        if not (normalized_provider and normalized_model):
+            normalized_provider = ""
+            normalized_model = ""
+        analysis_params: dict[str, str] = {
+            "select": _HEALTH_SELECT,
+            "timeframe": f"eq.{normalized}",
+            "order": "created_at.desc",
+            "limit": str(window),
+        }
+        if normalized_provider:
+            analysis_params["provider"] = f"eq.{normalized_provider}"
+            analysis_params["model"] = f"eq.{normalized_model}"
+
+        analyses_response = await self._request(
+            "GET",
+            "/market_ai_analyses",
+            params=analysis_params,
+        )
+        analysis_rows = analyses_response.json()
+        if not normalized_provider and not normalized_model and isinstance(analysis_rows, list):
+            latest_row = next((row for row in analysis_rows if isinstance(row, dict)), None)
+            if latest_row:
+                derived_provider = str(latest_row.get("provider") or "").strip().upper()
+                derived_model = str(latest_row.get("model") or "").strip()
+                if derived_provider and derived_model:
+                    analysis_params["provider"] = f"eq.{derived_provider}"
+                    analysis_params["model"] = f"eq.{derived_model}"
+                    analyses_response = await self._request(
+                        "GET", "/market_ai_analyses", params=analysis_params
+                    )
+                    analysis_rows = analyses_response.json()
+        scanner_response = await self._request(
+            "GET",
+            "/market_scanner_runs",
+            params={
+                "select": "failure_count",
+                "timeframe": f"eq.{normalized}",
+                "completed_at": "not.is.null",
+                "order": "completed_at.desc",
+                "limit": str(window),
+            },
+        )
+        scanner_rows = scanner_response.json()
+        safe_analysis_rows = (
+            analysis_rows[:_ROLLING_CANARY_ATTEMPTS] if isinstance(analysis_rows, list) else []
+        )
+        safe_scanner_rows = (
+            scanner_rows[:_ROLLING_CANARY_ATTEMPTS] if isinstance(scanner_rows, list) else []
+        )
+        latencies = [
+            int(row["latency_ms"])
+            for row in safe_analysis_rows
+            if isinstance(row, dict) and isinstance(row.get("latency_ms"), int) and row["latency_ms"] >= 0
+        ]
+        scanner_failures = sum(
+            int(row["failure_count"])
+            for row in safe_scanner_rows
+            if isinstance(row, dict)
+            and isinstance(row.get("failure_count"), int)
+            and row["failure_count"] >= 0
+        )
+        return compute_provider_health(
+            attempts=len(safe_analysis_rows),
+            successes=sum(
+                1
+                for row in safe_analysis_rows
+                if isinstance(row, dict) and row.get("status") == "SUCCESS"
+            ),
+            invalid_responses=sum(
+                1
+                for row in safe_analysis_rows
+                if isinstance(row, dict) and row.get("status") == "INVALID_RESPONSE"
+            ),
+            latencies_ms=latencies,
+            scanner_failures=scanner_failures,
+            scanner_cycles=len(safe_scanner_rows),
+        )

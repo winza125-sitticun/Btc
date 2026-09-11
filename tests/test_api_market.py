@@ -63,6 +63,32 @@ class FakeAIReader:
             }
         ]
 
+    async def operational_health(
+        self,
+        timeframe: str,
+        window: int,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ):
+        assert timeframe == "15m"
+        assert window == 20
+        assert provider in {None, "GEMINI"}
+        assert model in {None, "gemini-test"}
+        return {
+            "attempts": 20,
+            "successes": 19,
+            "failures": 1,
+            "success_rate": 95.0,
+            "invalid_response_rate": 0.0,
+            "median_latency_ms": 2200,
+            "p95_latency_ms": 2200,
+            "scanner_failure_rate": 0.0,
+            "status": "HEALTHY",
+            "can_expand": True,
+            "reasons": [],
+        }
+
 
 client = TestClient(app)
 
@@ -104,6 +130,33 @@ def test_latest_ai_analysis_endpoint_normalizes_timeframe_and_uses_safe_reader()
     assert payload[0]["risk_precheck_status"] == "FULL_RISK_CONTEXT_PENDING"
     assert "input_snapshot" not in payload[0]
     assert "error_message" not in payload[0]
+
+
+def test_performance_health_endpoint_scopes_to_active_provider_and_model(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "gemini")
+    monkeypatch.setenv("AI_MODEL", "gemini-test")
+    app.dependency_overrides[get_ai_reader] = lambda: FakeAIReader()
+    try:
+        response = client.get("/api/v1/performance/health?timeframe=%2015m%20&window=20")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "HEALTHY"
+    assert payload["can_expand"] is True
+    assert "input_snapshot" not in payload
+    assert "error_message" not in payload
+
+
+def test_performance_health_endpoint_rejects_windows_outside_canary_bounds():
+    app.dependency_overrides[get_ai_reader] = lambda: FakeAIReader()
+    try:
+        response = client.get("/api/v1/performance/health?window=19")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
