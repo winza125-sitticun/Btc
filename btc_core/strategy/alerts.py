@@ -53,8 +53,13 @@ class AlertEngine:
             existing.last_observed_at = observed
             return existing
         # Alert payloads are intentionally data-only; credentials never belong here.
-        safe_payload = {str(k): v for k, v in (payload or {}).items() if "token" not in str(k).lower() and "secret" not in str(k).lower() and "key" not in str(k).lower()}
+        def clean(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {str(k): clean(v) for k, v in value.items() if not any(word in str(k).lower() for word in ("token", "secret", "key"))}
+            if isinstance(value, list):
+                return [clean(item) for item in value]
+            return value
+        safe_payload = clean(dict(payload or {}))
         event = AlertEvent(kind, dedupe_key, title, short_summary, severity, safe_payload, observed, observed)
         self.events.append(event)
         return event
-

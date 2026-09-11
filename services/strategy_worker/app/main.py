@@ -135,7 +135,8 @@ async def run_forever() -> None:
         worker = StrategyWorker(repository=repository, market_client=fetcher,
                                  enabled=True,
                                  outcome_evaluation_enabled=config.outcome_evaluation_enabled,
-                                 simulation_engine_enabled=config.simulation_engine_enabled)
+                                 simulation_engine_enabled=config.simulation_engine_enabled,
+                                 alerts_enabled=config.alerts_enabled)
         try:
             while True:
                 result = await worker.run_cycle()

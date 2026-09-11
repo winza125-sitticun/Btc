@@ -130,9 +130,38 @@ class SupabaseStrategyRepository:
         }
         payload.pop("id", None)
         # Explicitly avoid credentials even if a caller supplied unsafe metadata.
-        payload["payload"] = {k: v for k, v in payload.get("payload", {}).items() if "token" not in k.lower() and "secret" not in k.lower() and "key" not in k.lower()}
-        response = await self._request("POST", "/market_alert_events", params={"on_conflict": "dedupe_key"}, headers={"Prefer": "resolution=merge-duplicates,return=representation"}, json=payload)
+        def clean(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: clean(v) for k, v in value.items() if not any(word in k.lower() for word in ("token", "secret", "key"))}
+            if isinstance(value, list): return [clean(v) for v in value]
+            return value
+        payload["payload"] = clean(payload.get("payload", {}))
+        existing = await self._request("GET", "/market_alert_events", params={"select": "*", "dedupe_key": f"eq.{payload['dedupe_key']}", "status": "in.(NEW,ACKNOWLEDGED)", "limit": "1"})
+        rows = existing.json()
+        if isinstance(rows, list) and rows:
+            row = rows[0]
+            await self._request("PATCH", f"/market_alert_events?id=eq.{row['id']}", headers={"Prefer": "return=representation"}, json={"last_observed_at": payload["last_observed_at"], "updated_at": payload["last_observed_at"]})
+            return {**row, "last_observed_at": payload["last_observed_at"]}
+        response = await self._request("POST", "/market_alert_events", headers={"Prefer": "return=representation"}, json=payload)
         rows = response.json(); return rows[0] if isinstance(rows, list) and rows else {}
+
+    async def refresh_metrics(self) -> list[dict[str, Any]]:
+        """Read the latest persisted metrics for the alert stage."""
+        return await self.read_strategy_metrics(limit=100)
+
+    async def derive_alerts(self) -> list[dict[str, Any]]:
+        """Persist provider degradation events from the latest metric snapshots."""
+        from .alerts import AlertEngine, AlertType
+        engine = AlertEngine()
+        metrics = await self.refresh_metrics()
+        created = []
+        for row in metrics:
+            rate = row.get("provider_success_rate")
+            provider = row.get("provider") or "unknown"
+            if rate is not None and float(rate) < 95:
+                event = engine.observe(alert_type=AlertType.PROVIDER_DEGRADED, dedupe_key=f"provider:{provider}", title="AI provider degraded", short_summary=f"Provider success rate is {rate}%", severity="WARNING")
+                created.append(await self.upsert_alert_event(event))
+        return created
 
     async def update_alert_delivery(self, *, alert_id: int, delivery_state: dict[str, Any]) -> None:
         if alert_id <= 0: raise ValueError("alert_id is required")

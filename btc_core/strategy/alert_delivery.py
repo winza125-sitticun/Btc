@@ -53,3 +53,12 @@ async def deliver_alert(adapter: _Adapter, message: str) -> DeliveryResult:
         return DeliveryResult("FAILED", type(exc).__name__)
     return DeliveryResult("DELIVERED")
 
+
+async def persist_and_deliver_alert(repository, alert_id: int, adapter: _Adapter, message: str) -> DeliveryResult:
+    """Deliver after persistence; delivery state errors never roll back the alert."""
+    result = await deliver_alert(adapter, message)
+    try:
+        await repository.update_alert_delivery(alert_id=alert_id, delivery_state={"state": result.state, "error": result.error})
+    except Exception:
+        pass
+    return result
