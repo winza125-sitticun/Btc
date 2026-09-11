@@ -67,6 +67,14 @@ export type PublicConfig = {
   ai_api_key_configured: boolean
 }
 
+export type Page<T> = { items: T[]; next_cursor: string | null }
+export type PerformanceSummary = Record<string, unknown> & { full_data_count?: number; partial_data_count?: number; win_rate?: number | null; expectancy?: number | null; max_drawdown_percent?: number | null }
+export type SimulationAccount = Record<string, unknown> & { balance?: number; equity?: number; realized_pnl?: number; max_drawdown_percent?: number }
+export type SimulationTrade = Record<string, unknown> & { id: number; ai_analysis_id: number; scanner_candidate_id: number; symbol: string; status: string; realized_pnl?: number | null }
+export type Alert = Record<string, unknown> & { id: number; alert_type: string; severity: string; title: string; short_summary: string; ai_analysis_id?: number | null; scanner_run_id?: string | null }
+export type Readiness = { id: number; overall_status: 'NOT_READY' | 'PAPER_READY' | 'LIVE_READY' | 'BLOCKED'; blocking_reasons: string[]; created_at: string }
+export type OrderIntent = Record<string, unknown> & { id: number; simulation_trade_id: number | null; ai_analysis_id: number | null; mode: 'DRY_RUN'; symbol: string; side: string; validation_status: string; exchange_submission_allowed: boolean }
+
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 
 async function getJson<T>(path: string): Promise<T> {
@@ -97,3 +105,18 @@ export function fetchLatestAIAnalyses(timeframe: string, limit = 10) {
 export function fetchPublicConfig() {
   return getJson<PublicConfig>('/api/v1/config/public')
 }
+
+export type StrategyPage = { items: Record<string, unknown>[]; next_cursor: string | null }
+export function fetchStrategy(resource: string, limit = 20) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (resource === 'order-intents') params.set('mode', 'DRY_RUN')
+  return getJson<StrategyPage>(`/api/v1/${resource}?${params}`)
+}
+
+function fetchPage<T>(path: string, limit = 50) { return getJson<Page<T>>(`${path}${path.includes('?') ? '&' : '?'}limit=${limit}`) }
+export function fetchPerformanceSummary() { return fetchPage<PerformanceSummary>('/api/v1/performance/summary') }
+export function fetchSimulationAccount() { return fetchPage<SimulationAccount>('/api/v1/simulation/account', 1) }
+export function fetchSimulationTrades() { return fetchPage<SimulationTrade>('/api/v1/simulation/trades') }
+export function fetchAlerts() { return fetchPage<Alert>('/api/v1/alerts') }
+export function fetchReadiness() { return fetchPage<Readiness>('/api/v1/readiness', 1) }
+export function fetchOrderIntents() { return fetchPage<OrderIntent>('/api/v1/order-intents?mode=DRY_RUN') }

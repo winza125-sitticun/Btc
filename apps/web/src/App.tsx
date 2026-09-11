@@ -4,6 +4,8 @@ import {
   fetchLatestCandidates,
   fetchLiveStates,
   fetchPublicConfig,
+  fetchStrategy,
+  type StrategyPage,
   type AIAnalysis,
   type LiveMarketState,
   type PublicConfig,
@@ -62,6 +64,7 @@ export default function App() {
   const [aiError, setAiError] = useState('')
   const [scannerLoading, setScannerLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  const [strategyData, setStrategyData] = useState<Record<string, StrategyPage | null>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -133,6 +136,20 @@ export default function App() {
     }
     void refreshConfig()
     const timer = window.setInterval(refreshConfig, 30_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const resources = ['performance/summary', 'simulation/account', 'alerts', 'readiness', 'order-intents']
+    async function refreshStrategy() {
+      const entries = await Promise.all(resources.map(async (resource) => {
+        try { return [resource, await fetchStrategy(resource)] as const } catch { return [resource, null] as const }
+      }))
+      if (!cancelled) setStrategyData(Object.fromEntries(entries))
+    }
+    void refreshStrategy()
+    const timer = window.setInterval(refreshStrategy, 30_000)
     return () => { cancelled = true; window.clearInterval(timer) }
   }, [])
 
@@ -271,6 +288,14 @@ export default function App() {
           <section className="guard">
             <strong>Risk Guard: ON</strong>
             <span>Realtime market data is read-only. AI order execution and live trading remain disabled.</span>
+          </section>
+
+          <section className="ops-grid" aria-label="Phase 8-9 operations">
+            <article className="panel ops-card"><p className="eyebrow">PERFORMANCE</p><h2>Learning metrics</h2><p>{strategyData['performance/summary'] ? 'Provider, sample, latency and outcome metrics available.' : 'Insufficient sample — waiting for strategy metrics.'}</p></article>
+            <article className="panel ops-card"><p className="eyebrow">SIMULATION</p><h2>Paper account</h2><p>{strategyData['simulation/account'] ? 'Balance, equity, PnL and simulated trades are read-only.' : 'Insufficient sample — simulation account data pending.'}</p></article>
+            <article className="panel ops-card"><p className="eyebrow">ALERTS</p><h2>Material alerts</h2><p>{strategyData.alerts?.items.length ? `${strategyData.alerts.items.length} persisted alert(s)` : 'No material alerts.'}</p></article>
+            <article className="panel ops-card"><p className="eyebrow">READINESS</p><h2>{String((strategyData.readiness?.items[0]?.overall_status ?? 'NOT_READY'))}</h2><p>States: NOT_READY · PAPER_READY · LIVE_READY · BLOCKED</p><p className="warning">Live execution remains disabled. LIVE_READY means readiness checks passed; it does not submit orders.</p></article>
+            <article className="panel ops-card"><p className="eyebrow">ORDER INTENTS</p><h2>DRY_RUN</h2><span className="mode-badge">DRY RUN — NOT SUBMITTED</span><p>{strategyData['order-intents']?.items.length ?? 0} read-only intent(s), associated by analysis/trade IDs.</p></article>
           </section>
         </main>
       ) : (
