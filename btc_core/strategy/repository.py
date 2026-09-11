@@ -62,12 +62,15 @@ class SupabaseStrategyRepository:
         """Persist a worker-owned paper trade; replaying a key is harmless."""
         if not account_id or not idempotency_key or account_name != "Production Canary":
             raise ValueError("account_id and idempotency_key are required")
-        if "ai_analysis_id" not in trade:
+        if not isinstance(trade.get("ai_analysis_id"), int) or trade["ai_analysis_id"] <= 0:
             raise ValueError("ai_analysis_id is required as the durable idempotency key")
         await self._assert_system_account(account_id)
         payload = {**trade, "account_id": account_id, "status": "PENDING_ENTRY"}
-        response = await self._request("POST", "/market_simulation_trades", params={"on_conflict": "ai_analysis_id", "account_id": f"eq.{account_id}"}, headers={"Prefer": "resolution=merge-duplicates,return=representation", "X-Idempotency-Key": idempotency_key}, json=payload)
+        response = await self._request("POST", "/market_simulation_trades", params={"on_conflict": "ai_analysis_id", "account_id": f"eq.{account_id}"}, headers={"Prefer": "resolution=ignore-duplicates,return=representation", "X-Idempotency-Key": idempotency_key}, json=payload)
         rows = response.json()
+        if isinstance(rows, list) and rows: return rows[0]
+        existing = await self._request("GET", "/market_simulation_trades", params={"select": "*", "ai_analysis_id": f"eq.{trade['ai_analysis_id']}", "account_id": f"eq.{account_id}", "limit": "1"})
+        rows = existing.json()
         return rows[0] if isinstance(rows, list) and rows else {}
 
     async def update_trade(self, *, trade_id: int, changes: dict[str, Any], idempotency_key: str) -> None:

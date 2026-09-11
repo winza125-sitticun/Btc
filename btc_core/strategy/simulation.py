@@ -65,8 +65,9 @@ class AccountState:
         self.equity = self.balance if self.equity is None else self.equity
         self.max_equity = self.equity if self.max_equity is None else max(self.max_equity, self.equity)
 
-    def reconcile(self, pnl: float) -> None:
+    def reconcile(self, pnl: float, *, gross_pnl: float = 0.0) -> None:
         self.realized_pnl += pnl
+        self.gross_realized_pnl += gross_pnl
         self.balance += pnl
         self.equity = self.balance
         self.max_equity = max(self.max_equity or self.equity, self.equity)
@@ -179,4 +180,4 @@ class PaperTradeEngine:
         net = (trade.gross_realized_pnl - trade.accounted_gross) - (costs - trade.accounted_costs) - (trade.funding_paid - trade.accounted_funding)
         trade.realized_pnl += net
         trade.accounted_costs, trade.accounted_funding, trade.accounted_gross = costs, trade.funding_paid, trade.gross_realized_pnl
-        self.account.reconcile(net)
+        self.account.reconcile(net, gross_pnl=gross)
