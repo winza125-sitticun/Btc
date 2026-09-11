@@ -118,6 +118,31 @@ class SupabaseStrategyRepository:
         response = await self._request("GET", "/market_strategy_experiments", params={"select": "id,name,description,baseline_identifier,variant_configuration,status,started_at,ended_at,sample_count,metric_deltas,decision_reason,created_at,updated_at", "order": "created_at.desc", "limit": str(limit)})
         rows = response.json(); return rows if isinstance(rows, list) else []
 
+    async def upsert_alert_event(self, event: Any) -> dict[str, Any]:
+        """Persist a material alert; duplicate keys update observation only."""
+        payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else {
+            "alert_type": event.alert_type.value, "severity": event.severity,
+            "title": event.title, "short_summary": event.short_summary,
+            "dedupe_key": event.dedupe_key, "payload": event.payload,
+            "first_observed_at": event.first_observed_at.isoformat(),
+            "last_observed_at": event.last_observed_at.isoformat(),
+            "status": event.status, "delivery_state": event.delivery_state,
+        }
+        payload.pop("id", None)
+        # Explicitly avoid credentials even if a caller supplied unsafe metadata.
+        payload["payload"] = {k: v for k, v in payload.get("payload", {}).items() if "token" not in k.lower() and "secret" not in k.lower() and "key" not in k.lower()}
+        response = await self._request("POST", "/market_alert_events", params={"on_conflict": "dedupe_key"}, headers={"Prefer": "resolution=merge-duplicates,return=representation"}, json=payload)
+        rows = response.json(); return rows[0] if isinstance(rows, list) and rows else {}
+
+    async def update_alert_delivery(self, *, alert_id: int, delivery_state: dict[str, Any]) -> None:
+        if alert_id <= 0: raise ValueError("alert_id is required")
+        await self._request("PATCH", f"/market_alert_events?id=eq.{alert_id}", headers={"Prefer": "return=minimal"}, json={"delivery_state": delivery_state})
+
+    async def read_alert_events(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 500: raise ValueError("limit must be between 1 and 500")
+        response = await self._request("GET", "/market_alert_events", params={"select": "id,alert_type,severity,symbol,ai_analysis_id,scanner_run_id,title,short_summary,dedupe_key,first_observed_at,last_observed_at,status,created_at,updated_at", "order": "created_at.desc", "limit": str(limit)})
+        rows = response.json(); return rows if isinstance(rows, list) else []
+
     async def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, public_binance_klines: PublicBinanceKlinesFetcher | None = None, fallback: Callable[[str, str, datetime, datetime, int], Awaitable[list[OHLCBar]]] | None = None) -> list[OHLCBar]:
         if fallback is not None:
             raise ValueError("fallback callbacks are not supported; use public_binance_klines")

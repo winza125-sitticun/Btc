@@ -42,6 +42,7 @@ class WorkerConfig:
     slippage_bps: float = 2
     entry_validity_minutes_15m: int = 60
     live_order_execution_enabled: bool = False
+    alerts_enabled: bool = False
 
 
 def load_worker_config() -> WorkerConfig:
@@ -55,6 +56,7 @@ def load_worker_config() -> WorkerConfig:
         slippage_bps=float(os.getenv("SIM_SLIPPAGE_BPS", "2")),
         entry_validity_minutes_15m=_seconds("SIM_ENTRY_VALIDITY_MINUTES_15M", 60),
         live_order_execution_enabled=_flag("LIVE_ORDER_EXECUTION_ENABLED"),
+        alerts_enabled=_flag("ALERTS_V1_ENABLED"),
     )
 
 
@@ -75,7 +77,8 @@ class StrategyWorker:
     def __init__(self, *, repository, market_client, enabled: bool = False,
                  outcome_evaluation_enabled: bool = False,
                  simulation_engine_enabled: bool = False,
-                 live_order_execution_enabled: bool = False) -> None:
+                 live_order_execution_enabled: bool = False,
+                 alerts_enabled: bool = False) -> None:
         if live_order_execution_enabled:
             raise ValueError("live order execution is prohibited for strategy worker")
         self.repository = repository
@@ -83,6 +86,7 @@ class StrategyWorker:
         self.enabled = enabled
         self.outcome_evaluation_enabled = outcome_evaluation_enabled
         self.simulation_engine_enabled = simulation_engine_enabled
+        self.alerts_enabled = alerts_enabled
 
     async def _call(self, name: str, *args):
         method = getattr(self.repository, name, None)
@@ -100,6 +104,8 @@ class StrategyWorker:
             ("evaluate_new_analyses", (), self.simulation_engine_enabled),
             ("update_trades", (self.market_client,), self.simulation_engine_enabled),
             ("reconcile_account", (), self.simulation_engine_enabled),
+            ("refresh_metrics", (), self.alerts_enabled),
+            ("derive_alerts", (), self.alerts_enabled),
         )
         completed: list[str] = []
         errors: list[tuple[str, str]] = []
