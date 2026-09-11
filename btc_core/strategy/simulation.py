@@ -55,6 +55,7 @@ class AccountState:
     balance: float = 1000.0
     equity: float | None = None
     realized_pnl: float = 0.0
+    gross_realized_pnl: float = 0.0
     max_equity: float | None = None
     max_drawdown_percent: float = 0.0
 
@@ -84,6 +85,7 @@ class PaperTrade:
     funding_paid: float = 0.0
     funding_quality: str = "MISSING"
     realized_pnl: float = 0.0
+    gross_realized_pnl: float = 0.0
     fills: int = 0
     opened_at: datetime | None = None
     closed_at: datetime | None = None
@@ -171,9 +173,10 @@ class PaperTradeEngine:
         long = trade.setup.side == "LONG"; effective = price * (1 - self.SLIPPAGE_RATE if long else 1 + self.SLIPPAGE_RATE)
         gross = (effective - trade.simulated_entry_price) * qty * (1 if long else -1)
         self._fill_cost(trade, effective, qty)
-        trade.realized_pnl += gross
+        trade.gross_realized_pnl += gross
         trade.remaining_quantity -= qty; trade.status = status; trade.closed_at = at
         costs = trade.fees_paid + trade.slippage_cost
-        net = (trade.realized_pnl - trade.accounted_gross) - (costs - trade.accounted_costs) - (trade.funding_paid - trade.accounted_funding)
-        trade.accounted_costs, trade.accounted_funding, trade.accounted_gross = costs, trade.funding_paid, trade.realized_pnl
+        net = (trade.gross_realized_pnl - trade.accounted_gross) - (costs - trade.accounted_costs) - (trade.funding_paid - trade.accounted_funding)
+        trade.realized_pnl += net
+        trade.accounted_costs, trade.accounted_funding, trade.accounted_gross = costs, trade.funding_paid, trade.gross_realized_pnl
         self.account.reconcile(net)

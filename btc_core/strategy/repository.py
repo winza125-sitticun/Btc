@@ -39,6 +39,12 @@ class SupabaseStrategyRepository:
         if response.is_error: raise StrategyRepositoryError(f"Supabase strategy returned HTTP {response.status_code}")
         return response
 
+    async def _assert_system_account(self, account_id: str) -> None:
+        response = await self._request("GET", "/market_simulation_accounts", params={"select": "id,name", "id": f"eq.{account_id}", "name": "eq.Production Canary", "limit": "1"})
+        rows = response.json()
+        if not isinstance(rows, list) or len(rows) != 1 or rows[0].get("name") != "Production Canary" or str(rows[0].get("id")) != str(account_id):
+            raise StrategyRepositoryError("account is not the Production Canary system account")
+
     async def analyses_missing_outcomes(self, limit: int = 100) -> list[dict[str, Any]]:
         if not 1 <= limit <= 500: raise ValueError("limit must be between 1 and 500")
         response = await self._request("GET", "/market_ai_analyses", params={"select": "id,scanner_candidate_id,symbol,timeframe,ai_direction,entry_min,entry_max,stop_loss,take_profits,created_at,market_ai_signal_outcomes(horizon)", "ai_direction": "in.(LONG,SHORT,WAIT,EXIT)", "status": "eq.SUCCESS", "limit": str(limit)})
@@ -58,6 +64,7 @@ class SupabaseStrategyRepository:
             raise ValueError("account_id and idempotency_key are required")
         if "ai_analysis_id" not in trade:
             raise ValueError("ai_analysis_id is required as the durable idempotency key")
+        await self._assert_system_account(account_id)
         payload = {**trade, "account_id": account_id, "status": "PENDING_ENTRY"}
         response = await self._request("POST", "/market_simulation_trades", params={"on_conflict": "ai_analysis_id", "account_id": f"eq.{account_id}"}, headers={"Prefer": "resolution=merge-duplicates,return=representation", "X-Idempotency-Key": idempotency_key}, json=payload)
         rows = response.json()
@@ -68,12 +75,15 @@ class SupabaseStrategyRepository:
             raise ValueError("trade_id and idempotency_key are required")
         if "account_id" not in changes: raise ValueError("account_id is required for scoped updates")
         account_id = changes["account_id"]
+        await self._assert_system_account(account_id)
         update = {key: value for key, value in changes.items() if key != "account_id"}
         await self._request("PATCH", f"/market_simulation_trades?id=eq.{trade_id}&account_id=eq.{account_id}", headers={"Prefer": "return=minimal", "X-Idempotency-Key": idempotency_key}, json=update)
 
     async def reconcile_account(self, *, account_id: str, changes: dict[str, Any], idempotency_key: str, account_name: str) -> None:
         if not account_id or not idempotency_key or account_name != "Production Canary":
             raise ValueError("account_id and idempotency_key are required")
+        await self._assert_system_account(account_id)
+        """Apply a complete state replacement; repeating the same payload is idempotent."""
         await self._request("PATCH", f"/market_simulation_accounts?id=eq.{account_id}", headers={"Prefer": "return=minimal", "X-Idempotency-Key": idempotency_key}, json=changes)
 
     async def persisted_candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, limit: int = 1500) -> list[dict[str, Any]]:
