@@ -92,5 +92,10 @@ def test_phase_8_9_migration_records_when_a_trade_actually_expires():
 def test_metrics_conflict_upgrade_is_forward_only_and_matches_repository_target():
     sql = UPGRADE_MIGRATION.read_text(encoding="utf-8").lower()
     assert "drop index if exists public.market_strategy_metrics_snapshot_key_idx" in sql
+    assert "update public.market_strategy_metrics" in sql
+    assert "where provider is null or model is null or timeframe is null or direction is null or symbol is null" in sql
+    assert "alter column provider set default ''" in sql
+    assert "alter column provider set not null" in sql
+    assert "alter column symbol set not null" in sql
     assert "create unique index if not exists market_strategy_metrics_snapshot_key_idx" in sql
     assert "on public.market_strategy_metrics(provider, model, timeframe, direction, symbol, rolling_window, window_ended_at)" in sql
