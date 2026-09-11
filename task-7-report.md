@@ -11,3 +11,4 @@ Verification: bundled Python focused tests passed: `10 passed` for `tests/test_s
 
 Implementation commit SHA: `9a9e34a0001ab815eb1717c53d38edc56046fe83`.
 Review-fix commit SHA: `a85a7157a496a8fc8203ddd5ba32f5fb8a03bfd5`.
+Conflict-upgrade migration commit SHA: `d484e2f4606d7a35ab171e340eb820b062dfb8e1`.
