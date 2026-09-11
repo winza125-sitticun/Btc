@@ -62,7 +62,7 @@ class SupabaseStrategyRepository:
         """Persist a worker-owned paper trade; replaying a key is harmless."""
         if not account_id or not idempotency_key or account_name != "Production Canary":
             raise ValueError("account_id and idempotency_key are required")
-        if not isinstance(trade.get("ai_analysis_id"), int) or trade["ai_analysis_id"] <= 0:
+        if type(trade.get("ai_analysis_id")) is not int or trade["ai_analysis_id"] <= 0:
             raise ValueError("ai_analysis_id is required as the durable idempotency key")
         await self._assert_system_account(account_id)
         payload = {**trade, "account_id": account_id, "status": "PENDING_ENTRY"}
