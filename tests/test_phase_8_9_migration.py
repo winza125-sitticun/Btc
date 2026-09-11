@@ -7,6 +7,7 @@ MIGRATION = (
     / "migrations"
     / "202609100002_phase_8_9_readiness.sql"
 )
+UPGRADE_MIGRATION = MIGRATION.parent / "202609100003_metrics_conflict_upgrade.sql"
 
 
 def test_phase_8_9_migration_creates_system_owned_strategy_tables():
@@ -86,3 +87,10 @@ def test_phase_8_9_migration_records_when_a_trade_actually_expires():
 
     assert "expires_at timestamptz not null" in sql
     assert "expired_at timestamptz" in sql
+
+
+def test_metrics_conflict_upgrade_is_forward_only_and_matches_repository_target():
+    sql = UPGRADE_MIGRATION.read_text(encoding="utf-8").lower()
+    assert "drop index if exists public.market_strategy_metrics_snapshot_key_idx" in sql
+    assert "create unique index if not exists market_strategy_metrics_snapshot_key_idx" in sql
+    assert "on public.market_strategy_metrics(provider, model, timeframe, direction, symbol, rolling_window, window_ended_at)" in sql
