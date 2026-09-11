@@ -1,0 +1,27 @@
+name: Spec Governance
+
+on:
+  pull_request:
+
+jobs:
+  spec-governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run governance unit tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pytest -q tests/test_spec_governance.py
+      - name: Validate pull-request Spec Kit artifacts
+        env:
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          python scripts/check_spec_governance.py \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}"
