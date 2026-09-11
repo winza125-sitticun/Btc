@@ -59,13 +59,21 @@ class ReadinessSnapshot(BaseModel):
     def status(self) -> ReadinessStatus:
         return self.overall_status
 
+    @property
+    def state(self) -> ReadinessStatus:
+        return self.overall_status
+
 
 def _check(ok: bool, evidence: Any, reason: str) -> ReadinessCheck:
     return ReadinessCheck(status="PASS" if ok else "FAIL", evidence=evidence, reason=None if ok else reason)
 
 
-def evaluate_readiness(evidence: ReadinessEvidence | Mapping[str, Any]) -> ReadinessSnapshot:
+def evaluate_readiness(evidence: ReadinessEvidence | Mapping[str, Any] | None = None, **observations: Any) -> ReadinessSnapshot:
     """Evaluate readiness without network calls, AI calls, or configuration mutation."""
+    if evidence is None:
+        evidence = observations
+    elif observations:
+        raise TypeError("pass evidence or keyword observations, not both")
     if not isinstance(evidence, ReadinessEvidence):
         evidence = ReadinessEvidence.model_validate(dict(evidence))
     checks: dict[str, ReadinessCheck] = {
