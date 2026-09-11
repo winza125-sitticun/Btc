@@ -7,6 +7,7 @@ Implemented strategy metrics and simulation-only experiment registry.
 - Added repository upsert/read methods for sanitized metrics and experiment records.
 - Added focused contract tests in `tests/test_strategy_metrics.py` and `tests/test_strategy_experiments.py`.
 
-Verification: `git diff --check` passed. The workspace has no Python interpreter/pytest executable available, so the focused test command could not be run locally; CI should run `pytest tests/test_strategy_metrics.py tests/test_strategy_experiments.py tests/test_strategy_repository.py -q`.
+Verification: bundled Python focused tests passed: `10 passed` for `tests/test_strategy_metrics.py`, `tests/test_strategy_experiments.py`, and `tests/test_strategy_repository.py`; `git diff --check` passed.
 
-Commit SHA: `9a9e34a0001ab815eb1717c53d38edc56046fe83` (superseded by the review-fix commit below).
+Implementation commit SHA: `9a9e34a0001ab815eb1717c53d38edc56046fe83`.
+Review-fix commit SHA: `a85a7157a496a8fc8203ddd5ba32f5fb8a03bfd5`.
