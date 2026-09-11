@@ -7,6 +7,8 @@ from typing import Any
 import httpx
 
 from .outcomes import OHLCBar, SignalOutcome
+from .experiments import StrategyExperiment
+from .metrics import StrategyMetrics
 
 
 class StrategyRepositoryError(RuntimeError):
@@ -92,6 +94,24 @@ class SupabaseStrategyRepository:
     async def persisted_candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, limit: int = 1500) -> list[dict[str, Any]]:
         if not 1 <= limit <= 1500: raise ValueError("limit must be between 1 and 1500")
         response = await self._request("GET", "/market_candles", params={"select": "symbol,timeframe,open_time,close_time,open,high,low,close,volume,quote_volume,trade_count,taker_buy_base_volume,taker_buy_quote_volume", "symbol": f"eq.{symbol.strip().upper()}", "timeframe": f"eq.{timeframe}", "open_time": f"gte.{start.isoformat()}", "close_time": f"lte.{end.isoformat()}", "order": "open_time.asc", "limit": str(limit)})
+        rows = response.json(); return rows if isinstance(rows, list) else []
+
+    async def upsert_strategy_metrics(self, metrics: StrategyMetrics) -> None:
+        """Persist a sanitized metrics snapshot; no analysis payloads are sent."""
+        await self._request("POST", "/market_strategy_metrics", headers={"Prefer": "return=minimal"}, json=metrics.model_dump(mode="json"))
+
+    async def read_strategy_metrics(self, *, window: str = "24H", limit: int = 100) -> list[dict[str, Any]]:
+        if window not in {"24H", "7D", "30D", "ALL"} or not 1 <= limit <= 500:
+            raise ValueError("invalid metrics query bound")
+        response = await self._request("GET", "/market_strategy_metrics", params={"select": "id,provider,model,timeframe,direction,symbol,rolling_window,window_started_at,window_ended_at,analysis_count,eligible_signal_count,simulated_trade_count,no_fill_count,win_count,loss_count,win_rate,average_net_return,median_net_return,expectancy,profit_factor,max_drawdown_percent,average_mfe_percent,average_mae_percent,tp1_hit_rate,tp2_hit_rate,tp3_hit_rate,sl_hit_rate,provider_success_rate,median_latency_ms,p95_latency_ms,full_data_count,partial_data_count,created_at", "rolling_window": f"eq.{window}", "order": "window_ended_at.desc", "limit": str(limit)})
+        rows = response.json(); return rows if isinstance(rows, list) else []
+
+    async def upsert_experiment(self, experiment: StrategyExperiment) -> None:
+        await self._request("POST", "/market_strategy_experiments", params={"on_conflict": "name"}, headers={"Prefer": "resolution=merge-duplicates,return=minimal"}, json=experiment.model_dump(mode="json"))
+
+    async def read_experiments(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 500: raise ValueError("limit must be between 1 and 500")
+        response = await self._request("GET", "/market_strategy_experiments", params={"select": "id,name,description,baseline_identifier,variant_configuration,status,started_at,ended_at,sample_count,metric_deltas,decision_reason,created_at,updated_at", "order": "created_at.desc", "limit": str(limit)})
         rows = response.json(); return rows if isinstance(rows, list) else []
 
     async def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, public_binance_klines: PublicBinanceKlinesFetcher | None = None, fallback: Callable[[str, str, datetime, datetime, int], Awaitable[list[OHLCBar]]] | None = None) -> list[OHLCBar]:
