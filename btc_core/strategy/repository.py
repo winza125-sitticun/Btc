@@ -142,7 +142,7 @@ class SupabaseStrategyRepository:
         if isinstance(rows, list) and rows:
             row = rows[0]
             await self._request("PATCH", f"/market_alert_events?id=eq.{row['id']}", headers={"Prefer": "return=representation"}, json={"last_observed_at": payload["last_observed_at"], "updated_at": payload["last_observed_at"]})
-            return {**row, "last_observed_at": payload["last_observed_at"]}
+            return {**row, "last_observed_at": payload["last_observed_at"], "_created": False}
         try:
             response = await self._request("POST", "/market_alert_events", headers={"Prefer": "return=representation"}, json=payload)
         except StrategyRepositoryError:
@@ -153,7 +153,7 @@ class SupabaseStrategyRepository:
                 raise
             row = rows[0]
             await self._request("PATCH", f"/market_alert_events?id=eq.{row['id']}", headers={"Prefer": "return=representation"}, json={"last_observed_at": payload["last_observed_at"], "updated_at": payload["last_observed_at"]})
-            return {**row, "last_observed_at": payload["last_observed_at"]}
+            return {**row, "last_observed_at": payload["last_observed_at"], "_created": False}
         rows = response.json(); return rows[0] if isinstance(rows, list) and rows else {}
 
     async def refresh_metrics(self) -> list[dict[str, Any]]:
@@ -174,7 +174,7 @@ class SupabaseStrategyRepository:
             if rate is not None and float(rate) < 95:
                 event = engine.observe(alert_type=AlertType.PROVIDER_DEGRADED, dedupe_key=f"provider:{provider}", title="AI provider degraded", short_summary=f"Provider success rate is {rate}%", severity="WARNING")
                 persisted = await self.upsert_alert_event(event)
-                created.append(persisted)
+                created.append({k: v for k, v in persisted.items() if k != "_created"})
                 message = f"{event.title}: {event.short_summary}"
                 channels = {item.strip().upper() for item in os.getenv("ALERT_CHANNELS", "IN_APP").split(",")}
                 adapters = []
@@ -184,7 +184,7 @@ class SupabaseStrategyRepository:
                     adapters.append(LineAdapter(channel_access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"], target_id=os.environ["LINE_TARGET_ID"]))
                 if "WEBHOOK" in channels and os.getenv("ALERT_WEBHOOK_URL", "").strip():
                     adapters.append(WebhookAdapter(url=os.environ["ALERT_WEBHOOK_URL"]))
-                if persisted.get("id"):
+                if persisted.get("id") and persisted.get("_created", True):
                     for adapter in adapters:
                         await persist_and_deliver_alert(self, int(persisted["id"]), adapter, message)
         return created
