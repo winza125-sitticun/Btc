@@ -47,8 +47,10 @@ def test_phase_8_9_migration_has_safety_indexes_and_sanitized_read_grants():
         "market_alert_events_recent_idx",
         "market_readiness_checks_latest_idx",
         "market_strategy_metrics_window_idx",
+        "market_strategy_metrics_snapshot_key_idx",
     ):
         assert index_name in sql
+    assert "on public.market_strategy_metrics(provider, model, timeframe, direction, symbol, rolling_window, window_ended_at)" in sql
 
     assert "for select to anon, authenticated" in sql
     assert "grant select (id, provider, model, timeframe, direction, symbol, rolling_window" in sql

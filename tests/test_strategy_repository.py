@@ -4,6 +4,7 @@ import pytest
 
 from btc_core.strategy.outcomes import SignalOutcome
 from btc_core.strategy.repository import PublicBinanceKlinesFetcher, SupabaseStrategyRepository
+from btc_core.strategy.metrics import StrategyMetrics
 
 
 @pytest.mark.asyncio
@@ -75,3 +76,17 @@ async def test_subclass_override_cannot_bypass_public_adapter_boundary():
         with pytest.raises(ValueError, match="approved public adapter"):
             await repo.candles("BTCUSDT", "1m", start, start, public_binance_klines=PrivateAdapter())
     assert invoked is False
+
+
+@pytest.mark.asyncio
+async def test_metrics_upsert_uses_literal_unique_dimensions_and_normalizes_nulls():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(201, json=[])
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    metrics = StrategyMetrics(rolling_window="24H", window_ended_at=now, analysis_count=0, eligible_signal_count=0, simulated_trade_count=0, no_fill_count=0, win_count=0, loss_count=0)
+    async with SupabaseStrategyRepository(supabase_url="https://x.supabase.co", api_key="service", transport=httpx.MockTransport(handler)) as repo:
+        await repo.upsert_strategy_metrics(metrics)
+    assert requests[0].url.params["on_conflict"] == "provider,model,timeframe,direction,symbol,rolling_window,window_ended_at"
+    assert all(requests[0].content.decode().count('"'+key+'":""') == 1 for key in ("provider", "model", "timeframe", "direction", "symbol"))
