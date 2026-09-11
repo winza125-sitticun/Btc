@@ -226,9 +226,10 @@ class SupabaseStrategyRepository:
         payload = intent.__dict__ if hasattr(intent, "__dict__") else {
             "idempotency_key": intent.idempotency_key, "ai_analysis_id": intent.analysis_id,
             "symbol": intent.symbol, "side": intent.side, "quantity": intent.quantity,
-            "leverage": intent.leverage, "entry_min": intent.entry[0], "entry_max": intent.entry[1],
-            "stop_loss": intent.stop_loss, "take_profits": list(intent.take_profits),
-            "risk_evidence": intent.risk_evidence, "mode": "DRY_RUN",
+            "leverage": intent.leverage, "entry_type": "LIMIT", "entry_price": sum(intent.entry) / 2,
+            "stop_loss": intent.stop_loss, "take_profit_instructions": list(intent.take_profits),
+            "risk_decision_snapshot": intent.risk_evidence, "client_intent_id": intent.idempotency_key,
+            "validation_status": "VALID", "rejection_reasons": [], "mode": "DRY_RUN",
             "exchange_submission_allowed": False,
         }
         payload.pop("id", None)
@@ -236,12 +237,16 @@ class SupabaseStrategyRepository:
         return payload
 
     create_order_intent = upsert_order_intent
+
+    async def create_order_intents(self) -> list[dict[str, Any]]:
+        """Worker hook; eligible setup selection is intentionally read-only until supplied."""
+        return []
     persist_order_intent = upsert_order_intent
 
     async def read_order_intents(self, *, limit: int = 100) -> list[dict[str, Any]]:
         if not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
-        response = await self._request("GET", "/market_order_intents", params={"select": "id,idempotency_key,ai_analysis_id,symbol,side,quantity,leverage,entry_min,entry_max,stop_loss,take_profits,risk_evidence,mode,exchange_submission_allowed,created_at", "order": "created_at.desc", "limit": str(limit)})
+        response = await self._request("GET", "/market_order_intents", params={"select": "id,simulation_trade_id,ai_analysis_id,mode,symbol,side,quantity,leverage,entry_type,entry_price,stop_loss,validation_status,rejection_reasons,exchange_submission_allowed,created_at,updated_at", "order": "created_at.desc", "limit": str(limit)})
         rows = response.json()
         return rows if isinstance(rows, list) else []
 
