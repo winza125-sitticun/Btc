@@ -98,7 +98,7 @@ class SupabaseStrategyRepository:
 
     async def upsert_strategy_metrics(self, metrics: StrategyMetrics) -> None:
         """Persist a sanitized metrics snapshot; no analysis payloads are sent."""
-        payload = metrics.model_dump(mode="json", exclude_none=True)
+        payload = metrics.model_dump(mode="json")
         for key in ("provider", "model", "timeframe", "direction", "symbol"):
             if payload.get(key) is None:
                 payload[key] = ""
