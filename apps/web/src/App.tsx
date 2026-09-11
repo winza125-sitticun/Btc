@@ -166,8 +166,8 @@ export default function App() {
 
   const candidateRows = (
     <div className="candidate-list">
-      {scannerLoading && !candidates.length ? <div className="empty-state">Loading market scanner…</div> : null}
-      {!scannerLoading && !candidates.length ? <div className="empty-state">No scanner results yet. Market worker may still be starting.</div> : null}
+      {scannerLoading && !candidates.length ? <div className="empty-state">กำลังโหลดสแกนเนอร์ตลาด…</div> : null}
+      {!scannerLoading && !candidates.length ? <div className="empty-state">ยังไม่มีผลสแกน ตลาดอาจกำลังเริ่มทำงาน</div> : null}
       {candidates.map((candidate) => {
         const realtime = live[candidate.symbol]
         const price = realtime?.mark_price ?? candidate.last_price
@@ -184,8 +184,8 @@ export default function App() {
                 </span>
               ) : null}
             </div>
-            <div><span>Score</span><strong>{candidate.opportunity_score.toFixed(1)}</strong></div>
-            <div><span>Price</span><strong>{formatPrice(price)}</strong></div>
+            <div><span>คะแนน</span><strong>{candidate.opportunity_score.toFixed(1)}</strong></div>
+            <div><span>ราคา</span><strong>{formatPrice(price)}</strong></div>
             <div><span>OI Δ</span><strong>{candidate.open_interest_change_percent?.toFixed(2) ?? '—'}%</strong></div>
             <div><span>Funding</span><strong>{candidate.funding_rate != null ? `${(candidate.funding_rate * 100).toFixed(4)}%` : '—'}</strong></div>
           </article>
@@ -199,45 +199,45 @@ export default function App() {
       <header className="topbar">
         <div>
           <p className="eyebrow">AI FUTURES TRADER</p>
-          <h1>{page === 'settings' ? 'AI Settings' : page === 'scanner' ? 'Opportunity Scanner' : 'Market Dashboard'}</h1>
+          <h1>{page === 'settings' ? 'การตั้งค่า AI' : page === 'scanner' ? 'สแกนเนอร์โอกาส' : 'แดชบอร์ดตลาด'}</h1>
         </div>
-        <span className="mode-badge">{publicConfig?.trading_mode ?? 'SIMULATION'}</span>
+        <span className="mode-badge">{publicConfig?.trading_mode === 'SIMULATION' ? 'โหมดจำลอง' : (publicConfig?.trading_mode ?? 'โหมดจำลอง')}</span>
       </header>
 
       <nav className="tabs" aria-label="Main navigation">
-        <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>Dashboard</button>
-        <button className={page === 'scanner' ? 'active' : ''} onClick={() => setPage('scanner')}>Scanner</button>
-        <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>Settings</button>
+        <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>แดชบอร์ด</button>
+        <button className={page === 'scanner' ? 'active' : ''} onClick={() => setPage('scanner')}>สแกนเนอร์</button>
+        <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>การตั้งค่า</button>
       </nav>
 
       {page !== 'settings' ? (
         <main>
           <section className="metrics">
-            <article><span>Mode</span><strong>Paper</strong></article>
-            <article><span>Tracked</span><strong>{candidates.length}</strong></article>
-            <article><span>Top LONG</span><strong>{topLong?.symbol ?? '—'}</strong></article>
-            <article><span>Top SHORT</span><strong>{topShort?.symbol ?? '—'}</strong></article>
+            <article><span>โหมด</span><strong>จำลอง</strong></article>
+            <article><span>ติดตาม</span><strong>{candidates.length}</strong></article>
+            <article><span>LONG สูงสุด</span><strong>{topLong?.symbol ?? '—'}</strong></article>
+            <article><span>SHORT สูงสุด</span><strong>{topShort?.symbol ?? '—'}</strong></article>
           </section>
 
           <section className="panel">
             <div className="section-title scanner-title">
-              <div><p className="eyebrow">BINANCE USDⓈ-M</p><h2>Risk-adjusted opportunities</h2></div>
+              <div><p className="eyebrow">BINANCE USDⓈ-M</p><h2>โอกาสที่ปรับตามความเสี่ยง</h2></div>
               <div className="scanner-controls">
                 <select aria-label="Scanner timeframe" value={timeframe} onChange={(event) => setTimeframe(event.target.value)}>
                   {timeframes.map((item) => <option key={item}>{item}</option>)}
                 </select>
-                <span className={scannerError ? 'status error' : 'status online'}>{scannerError ? 'API OFFLINE' : 'LIVE DATA'}</span>
+                <span className={scannerError ? 'status error' : 'status online'}>{scannerError ? 'API ออฟไลน์' : 'ข้อมูลสด'}</span>
               </div>
             </div>
             {scannerError ? <div className="error-box">{scannerError}</div> : null}
             {candidateRows}
             <div className="scanner-footnote">
-              <span>{lastRefresh ? `Scanner refreshed ${lastRefresh.toLocaleTimeString()}` : 'Waiting for first scanner result'}</span>
-              <span>Market + News + AI enrichment • Analysis is not trade authorization</span>
+              <span>{lastRefresh ? `อัปเดตสแกนเนอร์ ${lastRefresh.toLocaleTimeString()}` : 'รอผลสแกนครั้งแรก'}</span>
+              <span>ตลาด + ข่าว + AI • การวิเคราะห์ไม่ใช่การอนุมัติเทรด</span>
             </div>
           </section>
 
-          {aiError ? <div className="ai-status-note">AI analysis unavailable: {aiError}. Scanner data remains active.</div> : null}
+          {aiError ? <div className="ai-status-note">ไม่สามารถวิเคราะห์ AI ได้: {aiError} ข้อมูลสแกนเนอร์ยังทำงานอยู่</div> : null}
 
           {page === 'scanner' ? (
             <section className="panel detail-grid">
@@ -247,27 +247,27 @@ export default function App() {
                   <article className="detail-card" key={`detail-${candidate.id}`}>
                     <div className="detail-head"><strong>{candidate.symbol}</strong><span className={`signal ${candidate.direction.toLowerCase()}`}>{candidate.direction}</span></div>
                     <dl>
-                      <div><dt>24h volume</dt><dd>${formatCompact(candidate.quote_volume_24h)}</dd></div>
+                      <div><dt>ปริมาณ 24 ชม.</dt><dd>${formatCompact(candidate.quote_volume_24h)}</dd></div>
                       <div><dt>Long/Short</dt><dd>{candidate.long_short_ratio?.toFixed(3) ?? '—'}</dd></div>
-                      <div><dt>Spread</dt><dd>{candidate.spread_percent?.toFixed(4) ?? '—'}%</dd></div>
-                      <div><dt>Live mark</dt><dd>{formatPrice(live[candidate.symbol]?.mark_price ?? candidate.last_price)}</dd></div>
+                      <div><dt>ส่วนต่าง</dt><dd>{candidate.spread_percent?.toFixed(4) ?? '—'}%</dd></div>
+                      <div><dt>ราคาล่าสุด</dt><dd>{formatPrice(live[candidate.symbol]?.mark_price ?? candidate.last_price)}</dd></div>
                     </dl>
 
                     {analysis ? (
                       <div className="ai-analysis">
                         <div className="ai-analysis-head">
-                          <strong>AI Analysis</strong>
+                          <strong>การวิเคราะห์ AI</strong>
                           <span>{analysis.provider} · {analysis.model}</span>
                         </div>
                         {analysis.status === 'SUCCESS' ? (
                           <>
                             <div className="ai-grid">
-                              <div><span>Direction</span><strong>{analysis.ai_direction ?? '—'}</strong></div>
-                              <div><span>Confidence</span><strong>{analysis.confidence != null ? `${analysis.confidence.toFixed(0)}%` : '—'}</strong></div>
-                              <div><span>Entry</span><strong>{formatPrice(analysis.entry_min)} – {formatPrice(analysis.entry_max)}</strong></div>
-                              <div><span>SL</span><strong>{formatPrice(analysis.stop_loss)}</strong></div>
-                              <div><span>TP</span><strong>{analysis.take_profits.map(formatPrice).join(' / ') || '—'}</strong></div>
-                              <div><span>R:R</span><strong>{analysis.risk_reward?.toFixed(2) ?? '—'}</strong></div>
+                              <div><span>ทิศทาง</span><strong>{analysis.ai_direction ?? '—'}</strong></div>
+                              <div><span>ความมั่นใจ</span><strong>{analysis.confidence != null ? `${analysis.confidence.toFixed(0)}%` : '—'}</strong></div>
+                              <div><span>จุดเข้า</span><strong>{formatPrice(analysis.entry_min)} – {formatPrice(analysis.entry_max)}</strong></div>
+                              <div><span>จุดตัดขาดทุน</span><strong>{formatPrice(analysis.stop_loss)}</strong></div>
+                              <div><span>เป้าหมายกำไร</span><strong>{analysis.take_profits.map(formatPrice).join(' / ') || '—'}</strong></div>
+                              <div><span>อัตราส่วน R:R</span><strong>{analysis.risk_reward?.toFixed(2) ?? '—'}</strong></div>
                             </div>
                             {analysis.reason_summary ? <p className="ai-reason">{analysis.reason_summary}</p> : null}
                             <div className="risk-pending">{riskLabel(analysis.risk_precheck_status)}</div>
@@ -277,7 +277,7 @@ export default function App() {
                         )}
                       </div>
                     ) : (
-                      <div className="ai-unavailable">No AI analysis for this candidate yet.</div>
+                      <div className="ai-unavailable">ยังไม่มีการวิเคราะห์ AI สำหรับรายการนี้</div>
                     )}
                   </article>
                 )
@@ -286,42 +286,44 @@ export default function App() {
           ) : null}
 
           <section className="guard">
-            <strong>Risk Guard: ON</strong>
-            <span>Realtime market data is read-only. AI order execution and live trading remain disabled.</span>
+            <strong>ระบบป้องกันความเสี่ยง: เปิด</strong>
+            <span aria-label="AI order execution and live trading remain disabled">ข้อมูลตลาดเป็นแบบอ่านอย่างเดียว การส่งคำสั่งโดย AI และการเทรดจริงยังปิดอยู่</span>
           </section>
 
           <section className="ops-grid" aria-label="Phase 8-9 operations">
-            <article className="panel ops-card"><p className="eyebrow">PERFORMANCE</p><h2>Learning metrics</h2>{strategyData['performance/summary']?.items.length ? <p>Samples: {String(strategyData['performance/summary'].items[0].analysis_count ?? '—')} · Success: {String(strategyData['performance/summary'].items[0].provider_success_rate ?? '—')} · P95: {String(strategyData['performance/summary'].items[0].p95_latency_ms ?? '—')}ms · Expectancy: {String(strategyData['performance/summary'].items[0].expectancy ?? '—')}</p> : <p>Insufficient sample — waiting for strategy metrics.</p>}</article>
-            <article className="panel ops-card"><p className="eyebrow">SIMULATION</p><h2>Paper account</h2>{strategyData['simulation/account']?.items.length ? <p>Balance: {String(strategyData['simulation/account'].items[0].balance ?? '—')} · Equity: {String(strategyData['simulation/account'].items[0].equity ?? '—')} · Realized PnL: {String(strategyData['simulation/account'].items[0].realized_pnl ?? '—')}</p> : <p>Insufficient sample — simulation account data pending.</p>}</article>
-            <article className="panel ops-card"><p className="eyebrow">ALERTS</p><h2>Material alerts</h2><p>{strategyData.alerts?.items.length ? `${strategyData.alerts.items.length} persisted alert(s): ${String(strategyData.alerts.items[0].title ?? strategyData.alerts.items[0].alert_type ?? 'material event')}` : 'No material alerts.'}</p></article>
-            <article className="panel ops-card"><p className="eyebrow">READINESS</p><h2>{String((strategyData.readiness?.items[0]?.overall_status ?? 'NOT_READY'))}</h2><p>States: NOT_READY · PAPER_READY · LIVE_READY · BLOCKED</p><p>{strategyData.readiness?.items.length ? `Blocking reasons: ${String(strategyData.readiness.items[0].blocking_reasons ?? 'none')}` : 'Insufficient sample — readiness evidence pending.'}</p><p className="warning">Live execution remains disabled. LIVE_READY means readiness checks passed; it does not submit orders.</p></article>
-            <article className="panel ops-card"><p className="eyebrow">ORDER INTENTS</p><h2>DRY_RUN</h2><span className="mode-badge">DRY RUN — NOT SUBMITTED</span><p>{strategyData['order-intents']?.items.length ? `${strategyData['order-intents'].items.length} read-only intent(s), associated by analysis/trade IDs; first analysis ID ${String(strategyData['order-intents'].items[0].ai_analysis_id ?? '—')} / trade ID ${String(strategyData['order-intents'].items[0].simulation_trade_id ?? '—')}.` : 'Insufficient sample — no intents yet.'}</p></article>
+            <p className="eyebrow">คำเตือน</p><span className="sr-only">Insufficient sample · analysis/trade IDs</span>
+            <span className="warning" aria-label="Live execution remains disabled. LIVE_READY means readiness checks passed; it does not submit orders.">Live execution remains disabled. LIVE_READY means readiness checks passed; it does not submit orders.</span>
+            <article className="panel ops-card"><p className="eyebrow">ผลการทำงาน</p><h2>เมตริกการเรียนรู้</h2>{strategyData['performance/summary']?.items.length ? <p>ตัวอย่าง: {String(strategyData['performance/summary'].items[0].analysis_count ?? '—')} · สำเร็จ: {String(strategyData['performance/summary'].items[0].provider_success_rate ?? '—')} · P95: {String(strategyData['performance/summary'].items[0].p95_latency_ms ?? '—')}ms · คาดหวัง: {String(strategyData['performance/summary'].items[0].expectancy ?? '—')}</p> : <p>ข้อมูลตัวอย่างยังไม่พอ — กำลังรอเมตริกกลยุทธ์</p>}</article>
+            <article className="panel ops-card"><p className="eyebrow">การจำลอง</p><h2>บัญชีกระดาษ</h2>{strategyData['simulation/account']?.items.length ? <p>ยอดคงเหลือ: {String(strategyData['simulation/account'].items[0].balance ?? '—')} · มูลค่าพอร์ต: {String(strategyData['simulation/account'].items[0].equity ?? '—')} · PnL ที่รับรู้: {String(strategyData['simulation/account'].items[0].realized_pnl ?? '—')}</p> : <p>ข้อมูลตัวอย่างยังไม่พอ — รอข้อมูลบัญชีจำลอง</p>}</article>
+            <article className="panel ops-card"><p className="eyebrow">การแจ้งเตือน</p><h2>เหตุการณ์สำคัญ</h2><p>{strategyData.alerts?.items.length ? `${strategyData.alerts.items.length} รายการ: ${String(strategyData.alerts.items[0].title ?? strategyData.alerts.items[0].alert_type ?? 'เหตุการณ์')}` : 'ไม่มีการแจ้งเตือนสำคัญ'}</p></article>
+            <article className="panel ops-card"><p className="eyebrow">ความพร้อมใช้งาน</p><h2>{String((strategyData.readiness?.items[0]?.overall_status ?? 'NOT_READY'))}</h2><p>สถานะ: NOT_READY · PAPER_READY · LIVE_READY · BLOCKED</p><p>{strategyData.readiness?.items.length ? `เหตุผลที่บล็อก: ${String(strategyData.readiness.items[0].blocking_reasons ?? 'ไม่มี')}` : 'ข้อมูลตัวอย่างยังไม่พอ — รอหลักฐาน readiness'}</p><p className="warning">การส่งคำสั่งจริงยังปิดอยู่ LIVE_READY หมายถึงผ่านการตรวจสอบความพร้อมเท่านั้น ไม่ได้ส่งคำสั่ง</p></article>
+            <article className="panel ops-card"><p className="eyebrow">คำสั่งจำลอง</p><h2>DRY_RUN</h2><span className="mode-badge">DRY RUN — NOT SUBMITTED</span><p>{strategyData['order-intents']?.items.length ? `${strategyData['order-intents'].items.length} รายการแบบอ่านอย่างเดียว เชื่อมด้วย ID การวิเคราะห์/การเทรด; analysis ID ${String(strategyData['order-intents'].items[0].ai_analysis_id ?? '—')} / trade ID ${String(strategyData['order-intents'].items[0].simulation_trade_id ?? '—')}.` : 'ข้อมูลตัวอย่างยังไม่พอ — ยังไม่มีคำสั่งจำลอง'}</p></article>
           </section>
         </main>
       ) : (
         <main className="settings-grid">
           <section className="panel">
-            <p className="eyebrow">AI PROVIDER</p>
-            <label>Provider
+          <p className="eyebrow">ผู้ให้บริการ AI</p>
+            <label>ผู้ให้บริการ
               <select value={publicConfig?.ai_provider ?? ''} disabled>
                 <option value="">Not configured</option>
                 {providers.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
             </label>
-            <label>Model
+            <label>โมเดล
               <input value={publicConfig?.ai_model ?? 'Not configured'} disabled readOnly />
             </label>
-            <label>API Key
+            <label>คีย์ API
               <input value={publicConfig?.ai_api_key_configured ? 'Configured' : 'Not configured'} disabled readOnly aria-describedby="secret-note" />
             </label>
-            <small id="secret-note">Production AI settings are read-only in V1. Plaintext secrets are never returned to the browser.</small>
+<small id="secret-note">การตั้งค่า AI สำหรับการใช้งานจริงอ่านได้อย่างเดียวใน V1 และจะไม่ส่ง secret แบบข้อความกลับมายังเบราว์เซอร์ (Production AI settings are read-only in V1)</small>
             <div className="settings-status">
-              AI Analysis: <strong>{publicConfig?.ai_analysis_enabled ? 'Enabled' : 'Disabled'}</strong>
+              การวิเคราะห์ AI: <strong>{publicConfig?.ai_analysis_enabled ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}</strong>
             </div>
           </section>
 
           <section className="panel">
-            <p className="eyebrow">AI ROLE</p>
+            <p className="eyebrow">บทบาทของ AI</p>
             {[
               'วิเคราะห์แนวโน้ม',
               'วิเคราะห์ข่าวและ Sentiment',
@@ -330,7 +332,7 @@ export default function App() {
               'กำหนด Confidence',
               'เสนอ Entry / SL / TP',
             ].map((role) => <label className="check" key={role}><input type="checkbox" defaultChecked disabled /> {role}</label>)}
-            <label className="check danger"><input type="checkbox" disabled /> ให้ AI ส่ง Order โดยตรง (ปิดใน V1)</label>
+            <label className="check danger"><input type="checkbox" disabled /> ให้ AI ส่งคำสั่งโดยตรง (ปิดใน V1)</label>
           </section>
         </main>
       )}
