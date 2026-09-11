@@ -43,6 +43,7 @@ class WorkerConfig:
     entry_validity_minutes_15m: int = 60
     live_order_execution_enabled: bool = False
     alerts_enabled: bool = False
+    readiness_enabled: bool = False
 
 
 def load_worker_config() -> WorkerConfig:
@@ -57,6 +58,7 @@ def load_worker_config() -> WorkerConfig:
         entry_validity_minutes_15m=_seconds("SIM_ENTRY_VALIDITY_MINUTES_15M", 60),
         live_order_execution_enabled=_flag("LIVE_ORDER_EXECUTION_ENABLED"),
         alerts_enabled=_flag("ALERTS_V1_ENABLED"),
+        readiness_enabled=_flag("READINESS_V1_ENABLED"),
     )
 
 
@@ -78,7 +80,8 @@ class StrategyWorker:
                  outcome_evaluation_enabled: bool = False,
                  simulation_engine_enabled: bool = False,
                  live_order_execution_enabled: bool = False,
-                 alerts_enabled: bool = False) -> None:
+                 alerts_enabled: bool = False,
+                 readiness_enabled: bool = False) -> None:
         if live_order_execution_enabled:
             raise ValueError("live order execution is prohibited for strategy worker")
         self.repository = repository
@@ -87,6 +90,7 @@ class StrategyWorker:
         self.outcome_evaluation_enabled = outcome_evaluation_enabled
         self.simulation_engine_enabled = simulation_engine_enabled
         self.alerts_enabled = alerts_enabled
+        self.readiness_enabled = readiness_enabled
 
     async def _call(self, name: str, *args):
         method = getattr(self.repository, name, None)
@@ -106,6 +110,7 @@ class StrategyWorker:
             ("reconcile_account", (), self.simulation_engine_enabled),
             ("refresh_metrics", (), self.alerts_enabled),
             ("derive_alerts", (), self.alerts_enabled),
+            ("evaluate_readiness", (), self.readiness_enabled),
         )
         completed: list[str] = []
         errors: list[tuple[str, str]] = []
@@ -136,7 +141,8 @@ async def run_forever() -> None:
                                  enabled=True,
                                  outcome_evaluation_enabled=config.outcome_evaluation_enabled,
                                  simulation_engine_enabled=config.simulation_engine_enabled,
-                                 alerts_enabled=config.alerts_enabled)
+                                 alerts_enabled=config.alerts_enabled,
+                                 readiness_enabled=config.readiness_enabled)
         try:
             while True:
                 result = await worker.run_cycle()

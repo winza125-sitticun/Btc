@@ -9,6 +9,7 @@ import httpx
 from .outcomes import OHLCBar, SignalOutcome
 from .experiments import StrategyExperiment
 from .metrics import StrategyMetrics
+from .readiness import ReadinessEvidence, ReadinessSnapshot, evaluate_readiness
 
 
 class StrategyRepositoryError(RuntimeError):
@@ -197,6 +198,38 @@ class SupabaseStrategyRepository:
         if not 1 <= limit <= 500: raise ValueError("limit must be between 1 and 500")
         response = await self._request("GET", "/market_alert_events", params={"select": "id,alert_type,severity,symbol,ai_analysis_id,scanner_run_id,title,short_summary,dedupe_key,first_observed_at,last_observed_at,status,created_at,updated_at", "order": "created_at.desc", "limit": str(limit)})
         rows = response.json(); return rows if isinstance(rows, list) else []
+
+    async def persist_readiness_snapshot(self, snapshot: ReadinessSnapshot) -> None:
+        """Append an immutable readiness snapshot; never update an existing row."""
+        payload = {
+            "overall_status": snapshot.overall_status,
+            "mandatory_checks": {name: check.model_dump(mode="json") for name, check in snapshot.mandatory_checks.items()},
+            "evidence_window": snapshot.evidence_window,
+            "metrics_snapshot": snapshot.metrics_snapshot,
+            "blocking_reasons": list(snapshot.blocking_reasons),
+            "created_at": snapshot.created_at.isoformat(),
+        }
+        await self._request("POST", "/market_readiness_checks", headers={"Prefer": "return=minimal"}, json=payload)
+
+    async def read_readiness(self, *, limit: int = 1) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        response = await self._request("GET", "/market_readiness_checks", params={"select": "id,overall_status,blocking_reasons,created_at", "order": "created_at.desc", "limit": str(limit)})
+        rows = response.json()
+        return rows if isinstance(rows, list) else []
+
+    async def evaluate_readiness(self, evidence: ReadinessEvidence | dict[str, Any] | None = None) -> ReadinessSnapshot:
+        """Evaluate and append readiness evidence supplied by the worker coordinator."""
+        if evidence is None:
+            provider = getattr(self, "readiness_evidence", None)
+            if provider is None:
+                raise StrategyRepositoryError("readiness evidence is unavailable")
+            evidence = provider()
+            if hasattr(evidence, "__await__"):
+                evidence = await evidence
+        snapshot = evaluate_readiness(evidence)
+        await self.persist_readiness_snapshot(snapshot)
+        return snapshot
 
     async def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, public_binance_klines: PublicBinanceKlinesFetcher | None = None, fallback: Callable[[str, str, datetime, datetime, int], Awaitable[list[OHLCBar]]] | None = None) -> list[OHLCBar]:
         if fallback is not None:
