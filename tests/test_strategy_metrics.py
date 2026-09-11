@@ -42,3 +42,12 @@ def test_metrics_windows_exclude_old_rows_and_track_no_fill_and_drawdown():
     assert result.win_count == 0
     assert result.median_net_return is None
 
+
+def test_metrics_fail_closed_and_exclude_non_performance_rows_from_rates():
+    rows = [_row(data_quality=None, outcome="WIN", highest_tp_hit=3), _row(outcome="NO_FILL", simulated_trade=False), _row(outcome="NEUTRAL", simulated_trade=False)]
+    result = compute_strategy_metrics(rows, now=datetime(2026, 1, 2, tzinfo=timezone.utc))
+    assert result.full_data_count == 2
+    assert result.win_count == 0
+    assert result.win_rate is None
+    assert result.tp1_hit_rate is None
+    assert result.no_fill_count == 1

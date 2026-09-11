@@ -122,6 +122,12 @@ create table if not exists public.market_strategy_metrics (
 
 create index if not exists market_strategy_metrics_window_idx
   on public.market_strategy_metrics(rolling_window, window_ended_at desc, provider, model, timeframe);
+-- One snapshot per strategy dimension/window end; repository upserts are idempotent.
+create unique index if not exists market_strategy_metrics_snapshot_key_idx
+  on public.market_strategy_metrics(
+    coalesce(provider, ''), coalesce(model, ''), coalesce(timeframe, ''),
+    coalesce(direction, ''), coalesce(symbol, ''), rolling_window, window_ended_at
+  );
 
 create table if not exists public.market_strategy_experiments (
   id uuid primary key default gen_random_uuid(),

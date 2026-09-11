@@ -98,7 +98,7 @@ class SupabaseStrategyRepository:
 
     async def upsert_strategy_metrics(self, metrics: StrategyMetrics) -> None:
         """Persist a sanitized metrics snapshot; no analysis payloads are sent."""
-        await self._request("POST", "/market_strategy_metrics", headers={"Prefer": "return=minimal"}, json=metrics.model_dump(mode="json"))
+        await self._request("POST", "/market_strategy_metrics", params={"on_conflict": "provider,model,timeframe,direction,symbol,rolling_window,window_ended_at"}, headers={"Prefer": "resolution=merge-duplicates,return=minimal"}, json=metrics.model_dump(mode="json"))
 
     async def read_strategy_metrics(self, *, window: str = "24H", limit: int = 100) -> list[dict[str, Any]]:
         if window not in {"24H", "7D", "30D", "ALL"} or not 1 <= limit <= 500:

@@ -53,6 +53,7 @@ def transition_experiment(experiment: StrategyExperiment, target: ExperimentStat
     ``railway_variables`` is explicitly rejected to prevent learning code from
     acquiring an accidental production mutation interface.
     """
+    target = ExperimentStatus(target)
     if railway_variables is not None:
         raise ValueError("experiments cannot mutate production configuration")
     if target not in _TRANSITIONS[experiment.status]:

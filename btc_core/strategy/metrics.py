@@ -44,7 +44,6 @@ class StrategyMetrics(BaseModel):
     p95_latency_ms: int | None = None
     full_data_count: int = 0
     partial_data_count: int = 0
-    missing_data_count: int = 0
 
 
 def _value(row: Any, key: str, default: Any = None) -> Any:
@@ -92,7 +91,7 @@ def compute_strategy_metrics(
         if direction is not None and _value(row, "direction", _value(row, "ai_direction")) != direction: continue
         if symbol is not None and _value(row, "symbol") != symbol: continue
         selected.append(row)
-    full = [r for r in selected if _value(r, "data_quality", "FULL") == "FULL"]
+    full = [r for r in selected if _value(r, "data_quality") == "FULL"]
     returns = [float(_value(r, "final_return_percent")) for r in full if _value(r, "final_return_percent") is not None]
     wins = [r for r in full if _value(r, "outcome") == "WIN"]
     losses = [r for r in full if _value(r, "outcome") == "LOSS"]
@@ -105,16 +104,17 @@ def compute_strategy_metrics(
     latencies = [int(_value(r, "latency_ms")) for r in selected if _value(r, "latency_ms") is not None]
     statuses = [str(_value(r, "status")) for r in selected if _value(r, "status") is not None]
     quality = [_value(r, "data_quality", "FULL") for r in selected]
-    denominator = len(full)
+    performance = [r for r in full if _value(r, "outcome") in {"WIN", "LOSS"}]
+    denominator = len(performance)
     def avg(key):
         vals = [float(_value(r, key)) for r in full if _value(r, key) is not None]
         return round(sum(vals) / len(vals), 8) if vals else None
-    trade_count = sum(bool(_value(r, "simulated_trade", _value(r, "trade_id") is not None)) for r in selected)
+    trade_count = sum(bool(_value(r, "simulated_trade", _value(r, "trade_id") is not None)) for r in full)
     return StrategyMetrics(
         provider=provider, model=model, timeframe=timeframe, direction=direction, symbol=symbol,
         rolling_window=window, window_started_at=started, window_ended_at=ended,
         analysis_count=len(selected), eligible_signal_count=sum(bool(_value(r, "eligible", _value(r, "eligible_signal", False))) for r in selected),
-        simulated_trade_count=trade_count, no_fill_count=sum(_value(r, "outcome") == "NO_FILL" for r in full),
+        simulated_trade_count=trade_count, no_fill_count=sum(_value(r, "outcome") == "NO_FILL" for r in selected),
         win_count=len(wins), loss_count=len(losses), win_rate=_rate(len(wins), denominator),
         average_net_return=round(sum(returns) / len(returns), 8) if returns else None,
         median_net_return=round(float(median(returns)), 8) if returns else None,
@@ -122,13 +122,13 @@ def compute_strategy_metrics(
         profit_factor=round(profit / loss, 8) if loss else (None if not profit else float("inf")),
         max_drawdown_percent=round(drawdown, 8) if returns else None,
         average_mfe_percent=avg("mfe_percent"), average_mae_percent=avg("mae_percent"),
-        tp1_hit_rate=_rate(sum(int(_value(r, "highest_tp_hit", 0) or 0) >= 1 for r in full), denominator),
-        tp2_hit_rate=_rate(sum(int(_value(r, "highest_tp_hit", 0) or 0) >= 2 for r in full), denominator),
-        tp3_hit_rate=_rate(sum(int(_value(r, "highest_tp_hit", 0) or 0) >= 3 for r in full), denominator),
-        sl_hit_rate=_rate(sum(bool(_value(r, "stop_touched", False)) for r in full), denominator),
+        tp1_hit_rate=_rate(sum(int(_value(r, "highest_tp_hit", 0) or 0) >= 1 for r in performance), denominator),
+        tp2_hit_rate=_rate(sum(int(_value(r, "highest_tp_hit", 0) or 0) >= 2 for r in performance), denominator),
+        tp3_hit_rate=_rate(sum(int(_value(r, "highest_tp_hit", 0) or 0) >= 3 for r in performance), denominator),
+        sl_hit_rate=_rate(sum(bool(_value(r, "stop_touched", False)) for r in performance), denominator),
         provider_success_rate=_rate(sum(s in ("SUCCESS", "success") for s in statuses), len(statuses)),
         median_latency_ms=int(median(latencies)) if latencies else None, p95_latency_ms=_percentile(latencies, .95),
-        full_data_count=quality.count("FULL"), partial_data_count=quality.count("PARTIAL"), missing_data_count=quality.count("MISSING"),
+        full_data_count=quality.count("FULL"), partial_data_count=quality.count("PARTIAL"),
     )
 
 compute_metrics = compute_strategy_metrics

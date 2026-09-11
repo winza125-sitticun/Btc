@@ -19,4 +19,6 @@ def test_experiment_rejects_invalid_transitions_and_production_mutation():
         transition_experiment(experiment, ExperimentStatus.PROMOTABLE)
     with pytest.raises(ValueError):
         transition_experiment(experiment, ExperimentStatus.SIMULATION, railway_variables={"X": "Y"})
-
+    assert transition_experiment(experiment, "SIMULATION").status is ExperimentStatus.SIMULATION
+    with pytest.raises(ValueError):
+        transition_experiment(experiment, "PROMOTABLE", sample_count=0)

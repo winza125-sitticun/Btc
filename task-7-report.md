@@ -9,4 +9,4 @@ Implemented strategy metrics and simulation-only experiment registry.
 
 Verification: `git diff --check` passed. The workspace has no Python interpreter/pytest executable available, so the focused test command could not be run locally; CI should run `pytest tests/test_strategy_metrics.py tests/test_strategy_experiments.py tests/test_strategy_repository.py -q`.
 
-Commit SHA: to be filled after commit.
+Commit SHA: `9a9e34a0001ab815eb1717c53d38edc56046fe83` (superseded by the review-fix commit below).
