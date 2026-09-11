@@ -1,0 +1,14 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.strategy-worker"
+
+[deploy]
+startCommand = "python -m services.strategy_worker.app.main"
+restartPolicyType = "ON_FAILURE"
+
+[envs]
+STRATEGY_WORKER_ENABLED = "false"
+OUTCOME_EVALUATION_ENABLED = "false"
+SIMULATION_ENGINE_ENABLED = "false"
+LIVE_ORDER_EXECUTION_ENABLED = "false"
+STRATEGY_CYCLE_SECONDS = "60"

@@ -1,0 +1,1 @@
+"""Strategy worker application package."""
