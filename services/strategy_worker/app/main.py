@@ -44,6 +44,7 @@ class WorkerConfig:
     live_order_execution_enabled: bool = False
     alerts_enabled: bool = False
     readiness_enabled: bool = False
+    order_intent_dry_run_enabled: bool = False
 
 
 def load_worker_config() -> WorkerConfig:
@@ -59,6 +60,7 @@ def load_worker_config() -> WorkerConfig:
         live_order_execution_enabled=_flag("LIVE_ORDER_EXECUTION_ENABLED"),
         alerts_enabled=_flag("ALERTS_V1_ENABLED"),
         readiness_enabled=_flag("READINESS_V1_ENABLED"),
+        order_intent_dry_run_enabled=_flag("ORDER_INTENT_DRY_RUN_ENABLED"),
     )
 
 
@@ -91,6 +93,7 @@ class StrategyWorker:
         self.simulation_engine_enabled = simulation_engine_enabled
         self.alerts_enabled = alerts_enabled
         self.readiness_enabled = readiness_enabled
+        self.order_intent_dry_run_enabled = _flag("ORDER_INTENT_DRY_RUN_ENABLED")
 
     async def _call(self, name: str, *args):
         method = getattr(self.repository, name, None)
@@ -111,6 +114,7 @@ class StrategyWorker:
             ("refresh_metrics", (), self.alerts_enabled),
             ("derive_alerts", (), self.alerts_enabled),
             ("evaluate_readiness", (), self.readiness_enabled),
+            ("create_order_intents", (), self.order_intent_dry_run_enabled),
         )
         completed: list[str] = []
         errors: list[tuple[str, str]] = []

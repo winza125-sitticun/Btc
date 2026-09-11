@@ -10,6 +10,7 @@ from .outcomes import OHLCBar, SignalOutcome
 from .experiments import StrategyExperiment
 from .metrics import StrategyMetrics
 from .readiness import ReadinessEvidence, ReadinessSnapshot, evaluate_readiness
+from .order_intents import OrderIntent
 
 
 class StrategyRepositoryError(RuntimeError):
@@ -215,6 +216,31 @@ class SupabaseStrategyRepository:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
         response = await self._request("GET", "/market_readiness_checks", params={"select": "id,overall_status,blocking_reasons,created_at", "order": "created_at.desc", "limit": str(limit)})
+        rows = response.json()
+        return rows if isinstance(rows, list) else []
+
+    async def upsert_order_intent(self, intent: OrderIntent) -> dict[str, Any]:
+        """Persist a dry-run intent idempotently; no exchange endpoint is used."""
+        if intent.mode != "DRY_RUN" or intent.exchange_submission_allowed is not False:
+            raise ValueError("only non-submittable DRY_RUN intents are permitted")
+        payload = intent.__dict__ if hasattr(intent, "__dict__") else {
+            "idempotency_key": intent.idempotency_key, "ai_analysis_id": intent.analysis_id,
+            "symbol": intent.symbol, "side": intent.side, "quantity": intent.quantity,
+            "leverage": intent.leverage, "entry_min": intent.entry[0], "entry_max": intent.entry[1],
+            "stop_loss": intent.stop_loss, "take_profits": list(intent.take_profits),
+            "risk_evidence": intent.risk_evidence, "mode": "DRY_RUN",
+            "exchange_submission_allowed": False,
+        }
+        payload.pop("id", None)
+        await self._request("POST", "/market_order_intents", params={"on_conflict": "idempotency_key"}, headers={"Prefer": "resolution=ignore-duplicates,return=representation"}, json=payload)
+        return payload
+
+    create_order_intent = upsert_order_intent
+
+    async def read_order_intents(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        response = await self._request("GET", "/market_order_intents", params={"select": "id,idempotency_key,ai_analysis_id,symbol,side,quantity,leverage,entry_min,entry_max,stop_loss,take_profits,risk_evidence,mode,exchange_submission_allowed,created_at", "order": "created_at.desc", "limit": str(limit)})
         rows = response.json()
         return rows if isinstance(rows, list) else []
 
