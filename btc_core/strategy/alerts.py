@@ -55,7 +55,8 @@ class AlertEngine:
         # Alert payloads are intentionally data-only; credentials never belong here.
         def clean(value: Any) -> Any:
             if isinstance(value, dict):
-                return {str(k): clean(v) for k, v in value.items() if not any(word in str(k).lower() for word in ("token", "secret", "key"))}
+                blocked = ("token", "secret", "key", "password", "authorization", "credential", "api_key", "apikey")
+                return {str(k): clean(v) for k, v in value.items() if not any(word in str(k).lower() for word in blocked)}
             if isinstance(value, list):
                 return [clean(item) for item in value]
             return value

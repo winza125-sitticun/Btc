@@ -27,3 +27,8 @@ def test_payload_does_not_accept_secret_fields():
     engine = AlertEngine()
     event = engine.observe(alert_type=AlertType.HIGH_IMPACT_NEWS, dedupe_key="news:1", title="News", short_summary="summary", payload={"symbol": "BTCUSDT"})
     assert "token" not in str(event.payload).lower()
+
+
+def test_payload_secret_filter_is_recursive_and_handles_non_string_keys():
+    event = AlertEngine().observe(alert_type=AlertType.HIGH_IMPACT_NEWS, dedupe_key="news:2", title="News", short_summary="summary", payload={1: {"password": "x", "safe": [{"authorization": "y", "value": 3}]}})
+    assert event.payload == {"1": {"safe": [{"value": 3}]}}

@@ -132,7 +132,8 @@ class SupabaseStrategyRepository:
         # Explicitly avoid credentials even if a caller supplied unsafe metadata.
         def clean(value: Any) -> Any:
             if isinstance(value, dict):
-                return {k: clean(v) for k, v in value.items() if not any(word in k.lower() for word in ("token", "secret", "key"))}
+                blocked = ("token", "secret", "key", "password", "authorization", "credential", "api_key", "apikey")
+                return {str(k): clean(v) for k, v in value.items() if not any(word in str(k).lower() for word in blocked)}
             if isinstance(value, list): return [clean(v) for v in value]
             return value
         payload["payload"] = clean(payload.get("payload", {}))
@@ -142,7 +143,17 @@ class SupabaseStrategyRepository:
             row = rows[0]
             await self._request("PATCH", f"/market_alert_events?id=eq.{row['id']}", headers={"Prefer": "return=representation"}, json={"last_observed_at": payload["last_observed_at"], "updated_at": payload["last_observed_at"]})
             return {**row, "last_observed_at": payload["last_observed_at"]}
-        response = await self._request("POST", "/market_alert_events", headers={"Prefer": "return=representation"}, json=payload)
+        try:
+            response = await self._request("POST", "/market_alert_events", headers={"Prefer": "return=representation"}, json=payload)
+        except StrategyRepositoryError:
+            # Another worker may have inserted the same key between GET and POST.
+            existing = await self._request("GET", "/market_alert_events", params={"select": "*", "dedupe_key": f"eq.{payload['dedupe_key']}", "status": "in.(NEW,ACKNOWLEDGED)", "limit": "1"})
+            rows = existing.json()
+            if not isinstance(rows, list) or not rows:
+                raise
+            row = rows[0]
+            await self._request("PATCH", f"/market_alert_events?id=eq.{row['id']}", headers={"Prefer": "return=representation"}, json={"last_observed_at": payload["last_observed_at"], "updated_at": payload["last_observed_at"]})
+            return {**row, "last_observed_at": payload["last_observed_at"]}
         rows = response.json(); return rows[0] if isinstance(rows, list) and rows else {}
 
     async def refresh_metrics(self) -> list[dict[str, Any]]:
@@ -151,7 +162,9 @@ class SupabaseStrategyRepository:
 
     async def derive_alerts(self) -> list[dict[str, Any]]:
         """Persist provider degradation events from the latest metric snapshots."""
+        import os
         from .alerts import AlertEngine, AlertType
+        from .alert_delivery import LineAdapter, TelegramAdapter, WebhookAdapter, persist_and_deliver_alert
         engine = AlertEngine()
         metrics = await self.refresh_metrics()
         created = []
@@ -160,7 +173,20 @@ class SupabaseStrategyRepository:
             provider = row.get("provider") or "unknown"
             if rate is not None and float(rate) < 95:
                 event = engine.observe(alert_type=AlertType.PROVIDER_DEGRADED, dedupe_key=f"provider:{provider}", title="AI provider degraded", short_summary=f"Provider success rate is {rate}%", severity="WARNING")
-                created.append(await self.upsert_alert_event(event))
+                persisted = await self.upsert_alert_event(event)
+                created.append(persisted)
+                message = f"{event.title}: {event.short_summary}"
+                channels = {item.strip().upper() for item in os.getenv("ALERT_CHANNELS", "IN_APP").split(",")}
+                adapters = []
+                if "TELEGRAM" in channels and os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip():
+                    adapters.append(TelegramAdapter(bot_token=os.environ["TELEGRAM_BOT_TOKEN"], chat_id=os.environ["TELEGRAM_CHAT_ID"]))
+                if "LINE" in channels and os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip() and os.getenv("LINE_TARGET_ID", "").strip():
+                    adapters.append(LineAdapter(channel_access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"], target_id=os.environ["LINE_TARGET_ID"]))
+                if "WEBHOOK" in channels and os.getenv("ALERT_WEBHOOK_URL", "").strip():
+                    adapters.append(WebhookAdapter(url=os.environ["ALERT_WEBHOOK_URL"]))
+                if persisted.get("id"):
+                    for adapter in adapters:
+                        await persist_and_deliver_alert(self, int(persisted["id"]), adapter, message)
         return created
 
     async def update_alert_delivery(self, *, alert_id: int, delivery_state: dict[str, Any]) -> None:
