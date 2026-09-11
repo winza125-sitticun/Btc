@@ -52,11 +52,13 @@ class SupabaseStrategyRepository:
         payload = {"ai_analysis_id": analysis_id, "scanner_candidate_id": scanner_candidate_id, "symbol": symbol.strip().upper(), "timeframe": timeframe, "direction": direction, "horizon": horizon, "signal_created_at": signal_created_at.isoformat(), "evaluation_due_at": evaluation_due_at.isoformat(), "entry_reference": entry_reference, **outcome.model_dump(), "evaluated_at": datetime.now().astimezone().isoformat()}
         await self._request("POST", "/market_ai_signal_outcomes", params={"on_conflict": "ai_analysis_id,horizon"}, headers={"Prefer": "resolution=merge-duplicates,return=minimal"}, json=payload)
 
-    async def create_pending_trade(self, *, account_id: str, trade: dict[str, Any], idempotency_key: str, account_name: str = "Production Canary") -> dict[str, Any]:
+    async def create_pending_trade(self, *, account_id: str, trade: dict[str, Any], idempotency_key: str, account_name: str) -> dict[str, Any]:
         """Persist a worker-owned paper trade; replaying a key is harmless."""
         if not account_id or not idempotency_key or account_name != "Production Canary":
             raise ValueError("account_id and idempotency_key are required")
-        payload = {**trade, "account_id": account_id, "status": "PENDING_ENTRY", "idempotency_key": idempotency_key}
+        if "ai_analysis_id" not in trade:
+            raise ValueError("ai_analysis_id is required as the durable idempotency key")
+        payload = {**trade, "account_id": account_id, "status": "PENDING_ENTRY"}
         response = await self._request("POST", "/market_simulation_trades", params={"on_conflict": "ai_analysis_id", "account_id": f"eq.{account_id}"}, headers={"Prefer": "resolution=merge-duplicates,return=representation", "X-Idempotency-Key": idempotency_key}, json=payload)
         rows = response.json()
         return rows[0] if isinstance(rows, list) and rows else {}
@@ -69,8 +71,8 @@ class SupabaseStrategyRepository:
         update = {key: value for key, value in changes.items() if key != "account_id"}
         await self._request("PATCH", f"/market_simulation_trades?id=eq.{trade_id}&account_id=eq.{account_id}", headers={"Prefer": "return=minimal", "X-Idempotency-Key": idempotency_key}, json=update)
 
-    async def reconcile_account(self, *, account_id: str, changes: dict[str, Any], idempotency_key: str) -> None:
-        if not account_id or not idempotency_key:
+    async def reconcile_account(self, *, account_id: str, changes: dict[str, Any], idempotency_key: str, account_name: str) -> None:
+        if not account_id or not idempotency_key or account_name != "Production Canary":
             raise ValueError("account_id and idempotency_key are required")
         await self._request("PATCH", f"/market_simulation_accounts?id=eq.{account_id}", headers={"Prefer": "return=minimal", "X-Idempotency-Key": idempotency_key}, json=changes)
 

@@ -90,6 +90,7 @@ class PaperTrade:
     expired_at: datetime | None = None
     accounted_costs: float = 0.0
     accounted_funding: float = 0.0
+    accounted_gross: float = 0.0
     funding_timestamps: set[datetime] = field(default_factory=set)
 
     def __post_init__(self): self.remaining_quantity = self.setup.quantity
@@ -173,6 +174,6 @@ class PaperTradeEngine:
         trade.realized_pnl += gross
         trade.remaining_quantity -= qty; trade.status = status; trade.closed_at = at
         costs = trade.fees_paid + trade.slippage_cost
-        net = trade.realized_pnl - trade.accounted_costs - (trade.funding_paid - trade.accounted_funding)
-        trade.accounted_costs, trade.accounted_funding = costs, trade.funding_paid
+        net = (trade.realized_pnl - trade.accounted_gross) - (costs - trade.accounted_costs) - (trade.funding_paid - trade.accounted_funding)
+        trade.accounted_costs, trade.accounted_funding, trade.accounted_gross = costs, trade.funding_paid, trade.realized_pnl
         self.account.reconcile(net)
