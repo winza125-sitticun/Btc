@@ -21,7 +21,7 @@
 - [x] Add `scripts/check_spec_governance.py`.
 - [x] Add governance unit tests.
 - [x] Add `.github/workflows/spec-governance.yml`.
-- [ ] Verify governance tests pass.
+- [x] Verify governance tests pass in GitHub Actions.
 
 ## T4 — Expose workflow to reviewers/contributors
 
@@ -30,8 +30,8 @@
 
 ## T5 — Final verification
 
-- [ ] Confirm repository backend CI passes.
-- [ ] Confirm web build CI passes.
-- [ ] Confirm Spec governance CI passes.
+- [x] Confirm repository backend CI passes.
+- [x] Confirm web build CI passes.
+- [x] Confirm Spec governance CI passes.
 - [x] Confirm PR diff contains no runtime trading behavior changes.
-- [ ] Record convergence/review result in PR.
+- [x] Record convergence/review result and native-bootstrap caveat in PR #30.
