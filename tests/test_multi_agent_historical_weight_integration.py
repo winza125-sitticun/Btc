@@ -64,11 +64,21 @@ class RecordingOrchestrator:
 
 
 class PerformanceService:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, refresh_fail=False):
         self.fail = fail
+        self.refresh_fail = refresh_fail
         self.calls = []
+        self.refresh_calls = []
+        self.events = []
+    async def evaluate_mature_outcomes(self, as_of):
+        self.refresh_calls.append(as_of)
+        self.events.append("refresh")
+        if self.refresh_fail:
+            raise RuntimeError("outcome refresh unavailable")
+        return ()
     async def historical_weight_for(self, role, provider, model, as_of):
         self.calls.append((role, provider, model, as_of))
+        self.events.append("weight")
         if self.fail:
             raise RuntimeError("history unavailable")
         return 1.2
@@ -95,10 +105,12 @@ async def _run(performance):
 
 
 @pytest.mark.asyncio
-async def test_scan_runner_uses_persisted_point_in_time_historical_multiplier():
+async def test_scan_runner_refreshes_mature_outcomes_before_point_in_time_weight():
     performance = PerformanceService()
     summary, orchestrator = await _run(performance)
     assert summary.approved == 1
+    assert performance.refresh_calls == [NOW]
+    assert performance.events == ["refresh", "weight"]
     assert performance.calls == [(
         AgentRole.TECHNICAL, AIProvider.GEMINI, "gemini-test", NOW,
     )]
@@ -110,3 +122,12 @@ async def test_historical_weight_failure_falls_back_to_one_without_failing_candi
     summary, orchestrator = await _run(PerformanceService(fail=True))
     assert summary.approved == 1 and summary.failed == 0
     assert orchestrator.calls[0]["historical_weights"] == {AgentRole.TECHNICAL: 1.0}
+
+
+@pytest.mark.asyncio
+async def test_outcome_refresh_failure_is_isolated_from_current_candidate():
+    performance = PerformanceService(refresh_fail=True)
+    summary, orchestrator = await _run(performance)
+    assert summary.approved == 1 and summary.failed == 0
+    assert performance.events == ["refresh", "weight"]
+    assert orchestrator.calls[0]["historical_weights"] == {AgentRole.TECHNICAL: 1.2}
