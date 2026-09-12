@@ -185,12 +185,14 @@ async def test_non_primary_runtime_is_fail_closed_without_database_activity(mode
 
 
 class _RecoveryRepo:
-    def __init__(self, *, linked_trade_id=None, malformed_time=False):
+    def __init__(self, *, linked_trade_id=None, malformed_time=False, existing_quantity=0.5):
         self.linked_trade_id = linked_trade_id
         self.malformed_time = malformed_time
+        self.existing_quantity = existing_quantity
         self.intent_writes = 0
         self.trade_writes = 0
         self.intent_patches = 0
+        self.last_trade = None
 
     async def _request(self, method, path, **kwargs):
         if method == "GET" and path == "/ai_multi_agent_runs":
@@ -208,8 +210,25 @@ class _RecoveryRepo:
         if method == "GET" and path == "/market_order_intents":
             return httpx.Response(200, json=[{
                 "id": 77,
+                "idempotency_key": "persisted-intent-key",
                 "simulation_trade_id": self.linked_trade_id,
                 "multi_agent_run_id": RUN_ID,
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": self.existing_quantity,
+                "leverage": 1.0,
+                "entry_price": 100.5,
+                "stop_loss": 95.0,
+                "take_profit_instructions": [108.0, 112.0],
+                "risk_decision_snapshot": {
+                    "approved": True,
+                    "risk_amount": 2.75,
+                    "geometry_role": "TECHNICAL",
+                    "geometry_attempt_id": 11,
+                },
+                "validation_status": "VALID",
+                "mode": "DRY_RUN",
+                "exchange_submission_allowed": False,
             }])
         if method == "GET" and path == "/ai_multi_agent_risk_results":
             return httpx.Response(200, json=[{
@@ -273,20 +292,36 @@ class _RecoveryRepo:
 
     async def create_pending_trade(self, **kwargs):
         self.trade_writes += 1
+        self.last_trade = kwargs
         return {"id": 9, "multi_agent_run_id": RUN_ID}
 
 
 @pytest.mark.asyncio
-async def test_existing_unlinked_intent_is_recovered_and_linked_to_paper_trade():
+async def test_existing_unlinked_intent_is_recovered_without_reinserting_intent():
     repo = _RecoveryRepo(linked_trade_id=None)
 
     created = await create_multi_agent_order_intents(repo, "PRIMARY")
 
     assert len(created) == 1
     assert created[0]["simulation_trade_id"] == 9
-    assert repo.intent_writes == 1
+    assert created[0]["idempotency_key"] == "persisted-intent-key"
+    assert repo.intent_writes == 0
     assert repo.trade_writes == 1
     assert repo.intent_patches == 1
+    assert repo.last_trade["idempotency_key"] == "persisted-intent-key"
+    assert repo.last_trade["trade"]["quantity"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_existing_unlinked_intent_that_exceeds_current_safe_size_is_not_recovered():
+    repo = _RecoveryRepo(linked_trade_id=None, existing_quantity=100.0)
+
+    created = await create_multi_agent_order_intents(repo, "PRIMARY")
+
+    assert created == []
+    assert repo.intent_writes == 0
+    assert repo.trade_writes == 0
+    assert repo.intent_patches == 0
 
 
 @pytest.mark.asyncio
