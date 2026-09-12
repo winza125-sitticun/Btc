@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
+from btc_core.strategy.multi_agent_order_runtime import create_multi_agent_order_intents
 from btc_core.strategy.repository import SupabaseStrategyRepository
 
 RUN_ID = "11111111-1111-4111-8111-111111111111"
@@ -181,3 +182,120 @@ async def test_non_primary_runtime_is_fail_closed_without_database_activity(mode
         transport=httpx.MockTransport(forbidden),
     ) as repo:
         assert await repo.create_order_intents(mode) == []
+
+
+class _RecoveryRepo:
+    def __init__(self, *, linked_trade_id=None, malformed_time=False):
+        self.linked_trade_id = linked_trade_id
+        self.malformed_time = malformed_time
+        self.intent_writes = 0
+        self.trade_writes = 0
+        self.intent_patches = 0
+
+    async def _request(self, method, path, **kwargs):
+        if method == "GET" and path == "/ai_multi_agent_runs":
+            instant = "not-a-time" if self.malformed_time else NOW.isoformat()
+            return httpx.Response(200, json=[{
+                "id": RUN_ID,
+                "scanner_candidate_id": 42,
+                "symbol": "BTCUSDT",
+                "timeframe": "15m",
+                "started_at": instant,
+                "completed_at": instant,
+                "status": "COMPLETED",
+                "rollout_mode": "PRIMARY",
+            }])
+        if method == "GET" and path == "/market_order_intents":
+            return httpx.Response(200, json=[{
+                "id": 77,
+                "simulation_trade_id": self.linked_trade_id,
+                "multi_agent_run_id": RUN_ID,
+            }])
+        if method == "GET" and path == "/ai_multi_agent_risk_results":
+            return httpx.Response(200, json=[{
+                "id": 601,
+                "multi_agent_run_id": RUN_ID,
+                "consensus_id": 501,
+                "status": "APPROVED",
+                "approved": True,
+                "reason_codes": [],
+                "risk_policy_version": "multi-agent-risk-v1",
+            }])
+        if method == "GET" and path == "/ai_consensus_decisions":
+            return httpx.Response(200, json=[{
+                "id": 501,
+                "multi_agent_run_id": RUN_ID,
+                "direction": "LONG",
+                "consensus_confidence": 88,
+                "actionable": True,
+                "role_contributions": [
+                    {"role": "TECHNICAL", "effective_weight": 1.0, "participated": True},
+                ],
+            }])
+        if method == "GET" and path == "/ai_agent_attempts":
+            return httpx.Response(200, json=[{
+                "id": 11,
+                "role": "TECHNICAL",
+                "status": "SUCCESS",
+                "direction": "LONG",
+                "confidence": 82,
+                "entry_min": 100,
+                "entry_max": 101,
+                "stop_loss": 95,
+                "take_profits": [108, 112],
+                "risk_reward": 2.5,
+            }])
+        if method == "GET" and path == "/market_scanner_candidates":
+            return httpx.Response(200, json=[{"id": 42, "opportunity_score": 90}])
+        if method == "GET" and path == "/market_simulation_accounts":
+            return httpx.Response(200, json=[{
+                "id": ACCOUNT_ID,
+                "name": "Production Canary",
+                "starting_balance": 1000,
+                "balance": 1000,
+                "equity": 1000,
+                "daily_realized_loss": 0,
+            }])
+        if method == "GET" and path == "/market_simulation_trades":
+            return httpx.Response(200, json=[])
+        if method == "GET" and path == "/market_alert_events":
+            return httpx.Response(200, json=[])
+        if method == "GET" and path == "/market_readiness_checks":
+            return httpx.Response(200, json=[{"overall_status": "PAPER_READY"}])
+        if method == "PATCH" and path == "/market_order_intents":
+            self.intent_patches += 1
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    async def upsert_order_intent(self, intent):
+        self.intent_writes += 1
+        return {"multi_agent_run_id": intent.multi_agent_run_id}
+
+    async def create_pending_trade(self, **kwargs):
+        self.trade_writes += 1
+        return {"id": 9, "multi_agent_run_id": RUN_ID}
+
+
+@pytest.mark.asyncio
+async def test_existing_unlinked_intent_is_recovered_and_linked_to_paper_trade():
+    repo = _RecoveryRepo(linked_trade_id=None)
+
+    created = await create_multi_agent_order_intents(repo, "PRIMARY")
+
+    assert len(created) == 1
+    assert created[0]["simulation_trade_id"] == 9
+    assert repo.intent_writes == 1
+    assert repo.trade_writes == 1
+    assert repo.intent_patches == 1
+
+
+@pytest.mark.asyncio
+async def test_malformed_signal_time_never_writes_orphan_intent_or_trade():
+    repo = _RecoveryRepo(linked_trade_id=None, malformed_time=True)
+
+    created = await create_multi_agent_order_intents(repo, "PRIMARY")
+
+    assert created == []
+    assert repo.intent_writes == 0
+    assert repo.trade_writes == 0
+    assert repo.intent_patches == 0
