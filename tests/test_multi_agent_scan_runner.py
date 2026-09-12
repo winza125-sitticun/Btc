@@ -6,6 +6,7 @@ import pytest
 from btc_core.ai.analysis import AINewsContext, AIAnalysisSnapshot, TimeframeTechnicalContext
 from btc_core.ai.models import Direction
 from btc_core.ai.multi_agent.models import FrozenConfigSnapshot, RolloutMode
+from btc_core.ai.multi_agent.repository import RiskResultStatus
 from btc_core.ai.multi_agent.scan_runner import MultiAgentScanRunner
 from btc_core.market.scanner import MarketScanResult, MarketScannerCandidate
 from btc_core.market.supabase_repo import PersistedCandidateRef, PersistedScanRef
@@ -65,7 +66,9 @@ class RecordingOrchestrator:
         self.calls.append(kwargs)
         if kwargs["run"].symbol == "ETHUSDT":
             raise RuntimeError("one candidate failed")
-        return SimpleNamespace(risk=SimpleNamespace(approved=True))
+        return SimpleNamespace(
+            risk=SimpleNamespace(status=RiskResultStatus.APPROVED, approved=True)
+        )
 
 
 @pytest.mark.asyncio
@@ -111,6 +114,7 @@ async def test_scan_runner_filters_candidates_builds_frozen_runs_and_isolates_on
     assert summary.attempted == 2
     assert summary.approved == 1
     assert summary.rejected == 0
+    assert summary.pending == 0
     assert summary.failed == 1
     assert summary.skipped == 1
     first = orchestrator.calls[0]
