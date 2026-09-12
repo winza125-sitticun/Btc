@@ -266,15 +266,10 @@ class SupabaseStrategyRepository:
     create_order_intent = upsert_order_intent
 
     async def create_order_intents(self, multi_agent_mode: str = "OFF") -> list[dict[str, Any]]:
-        """Worker hook; source selection remains fail closed until supplied.
+        """Create fail-closed PRIMARY multi-agent DRY_RUN intents and paper trades."""
+        from .multi_agent_order_runtime import create_multi_agent_order_intents
 
-        The rollout mode is accepted here so the coordinator cannot accidentally
-        treat SHADOW evidence as an operational multi-agent source.
-        """
-        mode = str(getattr(multi_agent_mode, "value", multi_agent_mode) or "OFF").strip().upper()
-        if mode not in {"OFF", "SHADOW", "PRIMARY"}:
-            mode = "OFF"
-        return []
+        return await create_multi_agent_order_intents(self, multi_agent_mode)
     persist_order_intent = upsert_order_intent
 
     async def read_order_intents(self, *, limit: int = 100) -> list[dict[str, Any]]:
