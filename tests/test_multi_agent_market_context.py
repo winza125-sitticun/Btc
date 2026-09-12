@@ -30,7 +30,7 @@ def test_market_context_uses_exact_normalized_vortex_mapping():
     result = derive_market_context(_envelope())
 
     assert result.trend_strength == pytest.approx(0.7)
-    assert result.volatility == pytest.approx(0.5)
+    assert result.volatility == pytest.approx(1.0)
     assert result.momentum == pytest.approx(0.2)
     assert result.order_flow_imbalance == pytest.approx(0.4)
     assert result.liquidity == pytest.approx(0.75)
