@@ -6,6 +6,7 @@ import pytest
 from btc_core.ai.analysis import AINewsContext, AIAnalysisSnapshot, TimeframeTechnicalContext
 from btc_core.ai.models import AIProvider, Direction
 from btc_core.ai.multi_agent.models import AgentRole, FrozenConfigSnapshot, FrozenRoleAssignment, RolloutMode
+from btc_core.ai.multi_agent.repository import RiskResultStatus
 from btc_core.ai.multi_agent.scan_runner import MultiAgentScanRunner
 from btc_core.market.scanner import MarketScanResult, MarketScannerCandidate
 from btc_core.market.supabase_repo import PersistedCandidateRef, PersistedScanRef
@@ -60,7 +61,9 @@ class RecordingOrchestrator:
         self.calls = []
     async def orchestrate(self, **kwargs):
         self.calls.append(kwargs)
-        return SimpleNamespace(risk=SimpleNamespace(approved=True))
+        return SimpleNamespace(
+            risk=SimpleNamespace(status=RiskResultStatus.APPROVED, approved=True)
+        )
 
 
 class PerformanceService:
