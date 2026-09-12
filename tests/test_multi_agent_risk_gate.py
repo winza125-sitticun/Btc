@@ -5,7 +5,9 @@ from btc_core.ai.models import Direction
 from btc_core.ai.multi_agent.models import ConsensusDecision, FrozenSnapshotEnvelope, HesitationSnapshot
 from btc_core.ai.multi_agent.repository import RiskResultStatus
 from btc_core.ai.multi_agent.risk_gate import MultiAgentRiskPolicy, evaluate_multi_agent_risk
+from btc_core.risk.engine import RiskPolicy
 from btc_core.scanner.scoring import OpportunityInputs
+from btc_core.strategy.risk import FullRiskContext
 
 
 def _envelope(opportunity_score: float = 82) -> FrozenSnapshotEnvelope:
@@ -56,7 +58,21 @@ def _hesitation(total: float) -> HesitationSnapshot:
     )
 
 
-def test_deterministic_risk_gate_approves_only_when_all_thresholds_pass():
+def _approved_full_context() -> FullRiskContext:
+    return FullRiskContext(
+        confidence=82,
+        opportunity_score=82,
+        risk_reward=3,
+        requested_leverage=2,
+        daily_realized_loss_percent=0,
+        open_positions=0,
+        event_blocked=False,
+        balance=1000,
+        equity=1000,
+    )
+
+
+def test_deterministic_risk_gate_approves_only_when_all_thresholds_and_full_risk_pass():
     result = evaluate_multi_agent_risk(
         consensus=_consensus(),
         hesitation=_hesitation(30),
@@ -66,6 +82,8 @@ def test_deterministic_risk_gate_approves_only_when_all_thresholds_pass():
             max_hesitation=50,
             min_opportunity_score=75,
         ),
+        full_risk_context=_approved_full_context(),
+        full_risk_policy=RiskPolicy(),
     )
 
     assert result.status is RiskResultStatus.APPROVED
