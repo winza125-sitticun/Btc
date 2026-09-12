@@ -82,8 +82,12 @@ async def _run(performance):
         candidates=(PersistedCandidateRef(id=101, rank=1, symbol="BTCUSDT"),),
     )
     orchestrator = RecordingOrchestrator()
+
+    async def snapshot_builder(item):
+        return _snapshot(item)
+
     runner = MultiAgentScanRunner(
-        orchestrator=orchestrator, config=_config(), snapshot_builder=_snapshot,
+        orchestrator=orchestrator, config=_config(), snapshot_builder=snapshot_builder,
         performance_service=performance, now=lambda: NOW,
     )
     summary = await runner.analyze_scan(result, persisted)
