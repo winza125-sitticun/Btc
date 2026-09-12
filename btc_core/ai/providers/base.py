@@ -42,7 +42,12 @@ class AIProviderError(RuntimeError):
 
 
 class AIProviderClientProtocol(Protocol):
-    async def analyze(self, snapshot: AIAnalysisSnapshot) -> AIDecision: ...
+    async def analyze(
+        self,
+        snapshot: AIAnalysisSnapshot,
+        *,
+        instruction: str | None = None,
+    ) -> AIDecision: ...
 
 
 async def request_with_retry(
