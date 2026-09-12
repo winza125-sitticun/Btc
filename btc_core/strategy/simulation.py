@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from math import isfinite
+from uuid import UUID
 
 
 class TradeStatus(StrEnum):
@@ -33,7 +34,7 @@ class FundingObservation:
 
 @dataclass(frozen=True)
 class TradeSetup:
-    analysis_id: int
+    analysis_id: int | None
     symbol: str
     side: str
     timeframe: str
@@ -48,6 +49,29 @@ class TradeSetup:
     full_risk_approved: bool = False
     scanner_candidate_id: int | None = None
     full_risk_reasons: tuple[str, ...] = ()
+    multi_agent_run_id: str | None = None
+
+    def __post_init__(self) -> None:
+        analysis_valid = type(self.analysis_id) is int and self.analysis_id > 0
+        run_valid = False
+        if isinstance(self.multi_agent_run_id, str) and self.multi_agent_run_id.strip():
+            try:
+                UUID(self.multi_agent_run_id.strip())
+                run_valid = True
+            except ValueError:
+                run_valid = False
+        if analysis_valid == run_valid:
+            raise ValueError("exactly one analysis source is required")
+        if self.analysis_id is not None and not analysis_valid:
+            raise ValueError("analysis_id must be a positive integer")
+        if self.multi_agent_run_id is not None and not run_valid:
+            raise ValueError("multi_agent_run_id must be a UUID")
+
+    @property
+    def source_key(self):
+        if self.analysis_id is not None:
+            return self.analysis_id
+        return f"multi-agent:{self.multi_agent_run_id}"
 
 
 @dataclass
@@ -101,6 +125,8 @@ class PaperTrade:
     def signal_created_at(self): return self.setup.signal_created_at
     @property
     def analysis_id(self): return self.setup.analysis_id
+    @property
+    def multi_agent_run_id(self): return self.setup.multi_agent_run_id
 
 
 class PaperTradeEngine:
@@ -112,12 +138,13 @@ class PaperTradeEngine:
         self.account, self.trades = account, {}
 
     def create_pending(self, setup: TradeSetup) -> PaperTrade:
-        if setup.analysis_id in self.trades: return self.trades[setup.analysis_id]
+        source_key = setup.source_key
+        if source_key in self.trades: return self.trades[source_key]
         if not setup.full_risk_approved or setup.side not in ("LONG", "SHORT"):
             raise ValueError("trade setup is not simulation eligible")
         if setup.quantity <= 0 or setup.leverage <= 0 or setup.leverage > 5 or setup.entry_min <= 0 or setup.entry_max < setup.entry_min:
             raise ValueError("invalid trade geometry")
-        trade = PaperTrade(setup); self.trades[setup.analysis_id] = trade; return trade
+        trade = PaperTrade(setup); self.trades[source_key] = trade; return trade
 
     def process(self, bars: list[Bar], *, funding: list[FundingObservation] | None = None) -> None:
         funding = funding or []

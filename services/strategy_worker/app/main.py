@@ -5,6 +5,8 @@ import inspect
 import os
 from dataclasses import dataclass
 
+from btc_core.ai.multi_agent.config import resolve_multi_agent_mode
+from btc_core.ai.multi_agent.models import RolloutMode
 from btc_core.strategy.repository import PublicBinanceKlinesFetcher, SupabaseStrategyRepository
 
 
@@ -45,6 +47,7 @@ class WorkerConfig:
     alerts_enabled: bool = False
     readiness_enabled: bool = False
     order_intent_dry_run_enabled: bool = False
+    multi_agent_mode: RolloutMode = RolloutMode.OFF
 
 
 def load_worker_config() -> WorkerConfig:
@@ -61,6 +64,10 @@ def load_worker_config() -> WorkerConfig:
         alerts_enabled=_flag("ALERTS_V1_ENABLED"),
         readiness_enabled=_flag("READINESS_V1_ENABLED"),
         order_intent_dry_run_enabled=_flag("ORDER_INTENT_DRY_RUN_ENABLED"),
+        multi_agent_mode=resolve_multi_agent_mode(
+            os.getenv("AI_MULTI_AGENT_ENABLED"),
+            os.getenv("AI_MULTI_AGENT_MODE"),
+        ),
     )
 
 
@@ -84,7 +91,8 @@ class StrategyWorker:
                  live_order_execution_enabled: bool = False,
                  alerts_enabled: bool = False,
                  readiness_enabled: bool = False,
-                 order_intent_dry_run_enabled: bool = False) -> None:
+                 order_intent_dry_run_enabled: bool = False,
+                 multi_agent_mode: RolloutMode = RolloutMode.OFF) -> None:
         if live_order_execution_enabled:
             raise ValueError("live order execution is prohibited for strategy worker")
         self.repository = repository
@@ -95,6 +103,7 @@ class StrategyWorker:
         self.alerts_enabled = alerts_enabled
         self.readiness_enabled = readiness_enabled
         self.order_intent_dry_run_enabled = order_intent_dry_run_enabled
+        self.multi_agent_mode = multi_agent_mode
 
     async def _call(self, name: str, *args):
         method = getattr(self.repository, name, None)
@@ -115,7 +124,7 @@ class StrategyWorker:
             ("refresh_metrics", (), self.alerts_enabled),
             ("derive_alerts", (), self.alerts_enabled),
             ("evaluate_readiness", (), self.readiness_enabled),
-            ("create_order_intents", (), self.order_intent_dry_run_enabled),
+            ("create_order_intents", (self.multi_agent_mode.value,), self.order_intent_dry_run_enabled),
         )
         completed: list[str] = []
         errors: list[tuple[str, str]] = []
@@ -148,7 +157,8 @@ async def run_forever() -> None:
                                  simulation_engine_enabled=config.simulation_engine_enabled,
                                  alerts_enabled=config.alerts_enabled,
                                  readiness_enabled=config.readiness_enabled,
-                                 order_intent_dry_run_enabled=config.order_intent_dry_run_enabled)
+                                 order_intent_dry_run_enabled=config.order_intent_dry_run_enabled,
+                                 multi_agent_mode=config.multi_agent_mode)
         try:
             while True:
                 result = await worker.run_cycle()
