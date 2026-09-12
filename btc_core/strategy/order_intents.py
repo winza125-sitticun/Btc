@@ -179,6 +179,16 @@ def generate_order_intent(
         "stop_distance": sized.stop_distance,
         "readiness_status": readiness_status,
     }
+    for field in (
+        "geometry_role",
+        "geometry_attempt_id",
+        "geometry_effective_weight",
+        "consensus_confidence",
+        "opportunity_score",
+    ):
+        value = _get(setup, field)
+        if value is not None:
+            evidence[field] = value
     return OrderIntent(
         key,
         analysis_id,
