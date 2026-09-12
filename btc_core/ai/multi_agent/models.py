@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from btc_core.ai.analysis import AIAnalysisSnapshot
-from btc_core.ai.models import AIProvider
+from btc_core.ai.models import AIProvider, Direction
 
 
 class _FrozenModel(BaseModel):
@@ -26,6 +26,13 @@ class RolloutMode(StrEnum):
     OFF = "OFF"
     SHADOW = "SHADOW"
     PRIMARY = "PRIMARY"
+
+
+class AttemptStatus(StrEnum):
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    INVALID_RESPONSE = "INVALID_RESPONSE"
+    SKIPPED = "SKIPPED"
 
 
 class RolePrompt(_FrozenModel):
@@ -85,6 +92,79 @@ class AgentRequest(_FrozenModel):
     role: AgentRole
     prompt: RolePrompt
     snapshot_envelope: FrozenSnapshotEnvelope
+
+
+class AgentAttempt(_FrozenModel):
+    attempt_id: str = Field(min_length=1, max_length=200)
+    role: AgentRole
+    provider: AIProvider
+    model: str = Field(min_length=1, max_length=120)
+    status: AttemptStatus
+    direction: Direction | None = None
+    confidence: float | None = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_success_payload(self):
+        if self.status is AttemptStatus.SUCCESS and (self.direction is None or self.confidence is None):
+            raise ValueError("successful attempts require direction and confidence")
+        return self
+
+
+class RoleContribution(_FrozenModel):
+    role: AgentRole
+    provider: AIProvider
+    model: str = Field(min_length=1, max_length=120)
+    direction: Direction | None = None
+    confidence: float | None = Field(default=None, ge=0, le=100)
+    base_weight: float = Field(gt=0)
+    historical_multiplier: float = Field(ge=0)
+    effective_weight: float = Field(ge=0)
+    unsigned_strength: float = Field(ge=0)
+    signed_contribution: float
+    participated: bool
+    attempt_id: str | None = None
+
+
+class ConsensusDecision(_FrozenModel):
+    direction: Direction
+    consensus_confidence: float = Field(ge=0, le=100)
+    winning_agreement: float = Field(ge=0, le=1)
+    coverage: float = Field(ge=0, le=1)
+    signed_score: float = Field(ge=-1, le=1)
+    actionable: bool
+    supporting_roles: tuple[AgentRole, ...] = ()
+    opposing_roles: tuple[AgentRole, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    role_contributions: tuple[RoleContribution, ...] = ()
+    config_version: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    consensus_algorithm_version: str = "consensus-v1"
+
+
+class HesitationSnapshot(_FrozenModel):
+    total: float = Field(ge=0, le=100)
+    disagreement: float = Field(ge=0, le=1)
+    confidence_dispersion: float = Field(ge=0, le=1)
+    timeframe_conflict: float = Field(ge=0, le=1)
+    market_uncertainty: float = Field(ge=0, le=1)
+    disagreement_contribution: float = Field(ge=0, le=100)
+    confidence_dispersion_contribution: float = Field(ge=0, le=100)
+    timeframe_conflict_contribution: float = Field(ge=0, le=100)
+    market_uncertainty_contribution: float = Field(ge=0, le=100)
+    hesitation_algorithm_version: str = "hesitation-v1"
+
+
+class VortexInputs(_FrozenModel):
+    trend_strength: float = Field(ge=0, le=1)
+    volatility: float = Field(ge=0, le=1)
+    momentum: float = Field(ge=-1, le=1)
+    order_flow_imbalance: float = Field(ge=-1, le=1)
+    liquidity: float = Field(ge=0, le=1)
+    snapshot_ref: str = Field(min_length=1, max_length=200)
+    observed_at: datetime
+    mapping_version: str = "vortex-input-v1"
+    consensus_direction: Direction | None = None
+    winning_agreement: float | None = Field(default=None, ge=0, le=1)
+    hesitation_total: float | None = Field(default=None, ge=0, le=100)
 
 
 class MultiAgentConfig(_FrozenModel):
