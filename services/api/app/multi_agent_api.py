@@ -74,12 +74,16 @@ def sanitize_multi_agent_public(value: Any) -> Any:
     return value
 
 
-def get_multi_agent_reader() -> MultiAgentReadRepository:
+async def get_multi_agent_reader():
     url = os.getenv("SUPABASE_URL", "").strip()
     key = os.getenv("SUPABASE_ANON_KEY", "").strip()
     if not url or not key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_ANON_KEY are required")
-    return MultiAgentReadRepository(supabase_url=url, api_key=key)
+    repo = MultiAgentReadRepository(supabase_url=url, api_key=key)
+    try:
+        yield repo
+    finally:
+        await repo.aclose()
 
 
 def _configured_role_summary(role: AgentRole, frozen, env: dict[str, str]) -> dict[str, Any]:
