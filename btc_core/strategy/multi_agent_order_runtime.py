@@ -192,7 +192,7 @@ async def _process_run(repository: Any, run: dict[str, Any]) -> dict[str, Any] |
             "multi_agent_run_id": f"eq.{run_id}",
         },
     )
-    if existing is not None:
+    if existing is not None and existing.get("simulation_trade_id") is not None:
         return None
 
     risk = await _latest(
@@ -357,11 +357,12 @@ async def _process_run(repository: Any, run: dict[str, Any]) -> dict[str, Any] |
     )
     if intent is None:
         return None
-    await repository.upsert_order_intent(intent)
 
     signal_created_at = _parse_time(run.get("completed_at")) or _parse_time(run.get("started_at"))
     if signal_created_at is None:
         return None
+    await repository.upsert_order_intent(intent)
+
     trade = await repository.create_pending_trade(
         account_id=str(account["id"]),
         account_name="Production Canary",
