@@ -39,6 +39,7 @@ _HORIZON_TIMEFRAME = {
     EvaluationHorizon.H1: "1h",
     EvaluationHorizon.H4: "4h",
 }
+_HORIZONS = (EvaluationHorizon.M15, EvaluationHorizon.H1, EvaluationHorizon.H4)
 
 
 class MarketOutcomeBar(_FrozenModel):
@@ -102,6 +103,9 @@ class PerformanceSummary(_FrozenModel):
 class PerformanceRepositoryProtocol(Protocol):
     async def list_performance_evidence(self, as_of: datetime) -> tuple[PerformanceEvidence, ...]: ...
     async def append_performance_snapshot(self, item: AgentPerformanceSnapshot) -> int: ...
+    async def list_outcome_evaluation_candidates(self, as_of: datetime) -> tuple[OutcomeEvaluationCandidate, ...]: ...
+    async def load_market_outcome_bars(self, symbol: str, timeframe: str, start: datetime, end: datetime) -> tuple[MarketOutcomeBar, ...]: ...
+    async def append_outcome(self, outcome: DecisionOutcomeRecord) -> int: ...
 
 
 def _q(value: float) -> float:
@@ -207,6 +211,32 @@ def summarize_performance(rows: Sequence[PerformanceEvidence], *, as_of: datetim
 class MultiAgentPerformanceService:
     def __init__(self, repository: PerformanceRepositoryProtocol) -> None:
         self._repository = repository
+
+    async def evaluate_mature_outcomes(self, now: datetime) -> tuple[DecisionOutcomeRecord, ...]:
+        created: list[DecisionOutcomeRecord] = []
+        candidates = await self._repository.list_outcome_evaluation_candidates(now)
+        for candidate in candidates:
+            existing = set(candidate.existing_horizons)
+            for horizon in _HORIZONS:
+                if horizon in existing:
+                    continue
+                duration = _HORIZON_DURATION[horizon]
+                matured_at = candidate.started_at + duration
+                if matured_at > now:
+                    continue
+                timeframe = _HORIZON_TIMEFRAME[horizon]
+                horizon_bars = await self._repository.load_market_outcome_bars(
+                    candidate.symbol, timeframe, matured_at, matured_at + duration
+                )
+                mfe_bars = await self._repository.load_market_outcome_bars(
+                    candidate.symbol, "15m", candidate.started_at, matured_at + timedelta(microseconds=1)
+                )
+                outcome = evaluate_outcome(
+                    candidate, horizon, horizon_bars=horizon_bars, mfe_bars=mfe_bars, now=now
+                )
+                await self._repository.append_outcome(outcome)
+                created.append(outcome)
+        return tuple(created)
 
     async def historical_weight_for(self, role: AgentRole, provider: AIProvider, model: str, as_of: datetime) -> float:
         rows = await self._repository.list_performance_evidence(as_of)
