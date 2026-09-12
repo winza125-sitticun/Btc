@@ -14,7 +14,7 @@ from btc_core.ai.multi_agent.models import (
 )
 from btc_core.ai.multi_agent.orchestrator import MultiAgentOrchestrator
 from btc_core.ai.multi_agent.prompts import role_prompt
-from btc_core.ai.multi_agent.repository import MultiAgentRunRecord, RunStatus
+from btc_core.ai.multi_agent.repository import MultiAgentRunRecord, RiskResultStatus, RunStatus
 from btc_core.ai.providers.base import AIProviderError
 from btc_core.scanner.scoring import OpportunityInputs
 
@@ -92,6 +92,7 @@ class RecordingRepository:
         self.calls = []
         self.attempts = []
         self.risks = []
+        self.events = []
         self.finalized = None
 
     async def ensure_config_snapshot(self, config):
@@ -119,6 +120,11 @@ class RecordingRepository:
         self.calls.append("risk")
         self.risks.append(risk)
         return 301
+
+    async def append_event(self, event):
+        self.calls.append(f"event:{event.event_type}")
+        self.events.append(event)
+        return len(self.events)
 
     async def finalize_run(self, run_id, *, status, completed_at, valid_role_count):
         self.calls.append("finalize")
@@ -202,5 +208,19 @@ async def test_orchestrator_uses_same_snapshot_role_prompts_bounded_concurrency_
     assert result.valid_role_count == 5
     assert result.consensus.actionable is True
     assert result.hesitation.total >= 0
-    assert result.risk.approved is True
-    assert repository.risks[0].approved is True
+    assert result.risk.status is RiskResultStatus.PENDING
+    assert result.risk.approved is False
+    assert repository.risks[0].status is RiskResultStatus.PENDING
+    assert [event.event_type for event in repository.events] == [
+        "RUN_STARTED",
+        "AGENT_ATTEMPT",
+        "AGENT_ATTEMPT",
+        "AGENT_ATTEMPT",
+        "AGENT_ATTEMPT",
+        "AGENT_ATTEMPT",
+        "AGENT_ATTEMPT",
+        "CONSENSUS",
+        "HESITATION",
+        "RISK_PENDING",
+        "RUN_FINALIZED",
+    ]
