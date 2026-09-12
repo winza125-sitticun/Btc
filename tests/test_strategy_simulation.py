@@ -29,6 +29,9 @@ def test_eligible_analysis_creates_one_pending_trade_and_replay_is_idempotent():
     engine = PaperTradeEngine(AccountState(balance=1000))
     trade = engine.create_pending(setup())
     assert trade.status is TradeStatus.PENDING_ENTRY
+    assert trade.analysis_id == 11
+    assert trade.multi_agent_run_id is None
+    assert 11 in engine.trades
     assert engine.create_pending(setup()) is trade
     assert len(engine.trades) == 1
 
