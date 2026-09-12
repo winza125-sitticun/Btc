@@ -21,6 +21,7 @@ Clock = Callable[[], datetime]
 
 
 class PerformanceServiceProtocol(Protocol):
+    async def evaluate_mature_outcomes(self, as_of: datetime): ...
     async def historical_weight_for(self, role, provider, model: str, as_of: datetime) -> float: ...
 
 
@@ -61,6 +62,16 @@ class MultiAgentScanRunner:
         self._candidate_limit = candidate_limit
         self._min_opportunity_score = min_opportunity_score
         self._now = now
+
+    async def _refresh_mature_outcomes(self, as_of: datetime) -> None:
+        if self._performance_service is None:
+            return
+        try:
+            await self._performance_service.evaluate_mature_outcomes(as_of)
+        except Exception:
+            # Historical evaluation is advisory to future weighting and must not
+            # invalidate the scanner candidate currently being analyzed.
+            return
 
     async def _historical_weights(self, as_of: datetime) -> dict[AgentRole, float]:
         if self._performance_service is None:
@@ -109,12 +120,16 @@ class MultiAgentScanRunner:
         approved = 0
         rejected = 0
         failed = 0
+        performance_refreshed = False
         for candidate, persisted in selected:
             try:
                 snapshot = await self._snapshot_builder(candidate)
                 observed_at = self._now()
                 if observed_at.tzinfo is None:
                     raise ValueError("scan runner clock must return a timezone-aware timestamp")
+                if not performance_refreshed:
+                    await self._refresh_mature_outcomes(observed_at)
+                    performance_refreshed = True
                 snapshot_ref = (
                     f"scan:{persisted_scan.run_id}:candidate:{persisted.id}:"
                     f"{observed_at.astimezone(timezone.utc).isoformat()}"
