@@ -77,10 +77,68 @@ dd { margin: 0; font-size: .82rem; font-weight: 700; }
 .ops-card p { color: #8f9cbc; line-height: 1.45; }
 .warning { color: #efb6b6 !important; font-size: .9rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+.multi-agent-panel { margin-top: 14px; overflow: hidden; }
+.multi-agent-title { align-items: flex-start; }
+.multi-agent-subtitle { margin: 8px 0 0; color: #8f9cbc; font-size: .8rem; line-height: 1.5; }
+.multi-agent-health { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.run-status, .stale-badge { display: inline-flex; min-height: 30px; align-items: center; padding: 0 9px; border-radius: 999px; font-size: .7rem; font-weight: 800; }
+.run-status { color: #b9c8ef; background: #18223d; border: 1px solid #31446e; }
+.run-status.running, .run-status.partial { color: #dacb9e; background: #241f14; border-color: #5d4d2e; }
+.stale-badge { color: #efb6b6; background: #351a20; border: 1px solid #70404a; }
+.run-summary-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.run-summary-strip > div { min-width: 0; padding: 10px; border: 1px solid #202e4c; border-radius: 10px; background: #0d1426; }
+.run-summary-strip span, .role-metrics span, .decision-metrics span, .hesitation-grid span { display: block; color: #7f8eae; font-size: .68rem; }
+.run-summary-strip strong { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.role-card { min-width: 0; padding: 12px; border: 1px solid #294064; border-radius: 12px; background: #10182b; }
+.role-card.missing-role { border-style: dashed; opacity: .78; }
+.role-card.wait-evidence, .consensus-card.wait-evidence { border-color: #5d4d2e; background: #211c12; }
+.role-card-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.role-card-head > div { min-width: 0; }
+.role-card-head strong { display: block; margin-top: 4px; font-size: .9rem; }
+.role-code { color: #8fa2d7; font-size: .65rem; font-weight: 800; letter-spacing: .06em; overflow-wrap: anywhere; }
+.role-state { max-width: 50%; padding: 4px 7px; border-radius: 999px; background: #18223d; color: #aebbdc; font-size: .62rem; text-align: center; overflow-wrap: anywhere; }
+.role-state.success { color: #a9e6c7; background: #123526; }
+.role-state.failed, .role-state.invalid_response { color: #efb6b6; background: #351a20; }
+.role-provider { margin: 10px 0; color: #8f9cbc; font-size: .72rem; overflow-wrap: anywhere; }
+.role-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.role-metrics > div { min-width: 0; padding: 7px; border-radius: 8px; background: #0b1020; }
+.role-metrics strong { display: block; margin-top: 3px; font-size: .76rem; overflow-wrap: anywhere; }
+.role-reason { margin: 10px 0 0; color: #aebbdc; font-size: .74rem; line-height: 1.45; overflow-wrap: anywhere; }
+.decision-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.consensus-card, .risk-card { padding: 14px; border: 1px solid #294064; border-radius: 12px; background: #0d1426; }
+.consensus-card h3, .risk-card h3, .hesitation-head h3, .event-head h3 { margin: 0; }
+.decision-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 12px 0; }
+.decision-metrics > div { padding: 8px; border-radius: 8px; background: #10182b; }
+.decision-metrics strong { display: block; margin-top: 3px; }
+.consensus-card p:last-child, .risk-card p:last-child { margin: 10px 0 0; color: #8f9cbc; font-size: .76rem; line-height: 1.45; }
+.risk-card.not-approved { border-color: #5d4d2e; }
+.risk-card.approved { border-color: #375b4c; background: #10251d; }
+.hesitation-section, .event-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid #202e4c; }
+.hesitation-head, .event-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+.hesitation-head > strong { font-size: 1.15rem; }
+.hesitation-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.hesitation-grid article { padding: 10px; border-radius: 10px; background: #0d1426; border: 1px solid #202e4c; }
+.hesitation-grid strong { display: block; margin-top: 5px; }
+.hesitation-grid small { display: block; margin-top: 4px; }
+.event-head > span { color: #8f9cbc; font-size: .75rem; }
+.event-timeline { display: grid; gap: 0; }
+.event-timeline article { display: grid; grid-template-columns: 18px 1fr; gap: 8px; padding: 9px 0; border-top: 1px solid #202e4c; }
+.event-timeline article:first-child { border-top: 0; }
+.event-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #5270b7; }
+.event-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.event-meta strong { font-size: .7rem; }
+.event-meta span { color: #7f8eae; font-size: .68rem; }
+.event-timeline p { margin: 5px 0 0; color: #aebbdc; font-size: .76rem; line-height: 1.4; overflow-wrap: anywhere; }
+.multi-agent-footnote { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px solid #202e4c; color: #7886a7; font-size: .7rem; }
+
 @media (max-width: 850px) {
   .detail-grid { grid-template-columns: 1fr 1fr; }
   .candidate { grid-template-columns: 40px minmax(100px, 1fr) repeat(2, minmax(65px, auto)); }
   .candidate > div:nth-last-child(2), .candidate > div:nth-last-child(1) { display: none; }
+  .role-grid { grid-template-columns: 1fr 1fr; }
+  .hesitation-grid { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 720px) {
   .app-shell { padding: 14px; }
@@ -89,11 +147,16 @@ dd { margin: 0; font-size: .82rem; font-weight: 700; }
   .settings-grid { grid-template-columns: 1fr; }
   .candidate { grid-template-columns: 40px 1fr 62px; }
   .candidate > div:nth-last-child(2), .candidate > div:nth-last-child(1) { display: none; }
+  .run-summary-strip { grid-template-columns: 1fr 1fr; }
+  .decision-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
-  .scanner-title { align-items: flex-start; flex-direction: column; }
+  .scanner-title, .multi-agent-title { align-items: flex-start; flex-direction: column; }
   .detail-grid { grid-template-columns: 1fr; }
   .ai-grid { grid-template-columns: 1fr; }
   .ai-analysis-head { flex-direction: column; }
   .ai-analysis-head span { text-align: left; }
+  .multi-agent-health { justify-content: flex-start; }
+  .role-grid, .hesitation-grid { grid-template-columns: 1fr; }
+  .decision-metrics { grid-template-columns: 1fr; }
 }

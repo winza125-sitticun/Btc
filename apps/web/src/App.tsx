@@ -11,6 +11,7 @@ import {
   type PublicConfig,
   type ScannerCandidate,
 } from './api'
+import { MultiAgentPanel } from './MultiAgentPanel'
 
 const providers = [
   { value: 'GEMINI', label: 'Gemini' },
@@ -236,6 +237,8 @@ export default function App() {
               <span>ตลาด + ข่าว + AI • การวิเคราะห์ไม่ใช่การอนุมัติเทรด</span>
             </div>
           </section>
+
+          {page === 'dashboard' ? <MultiAgentPanel timeframe={timeframe} /> : null}
 
           {aiError ? <div className="ai-status-note">ไม่สามารถวิเคราะห์ AI ได้: {aiError} ข้อมูลสแกนเนอร์ยังทำงานอยู่</div> : null}
 
