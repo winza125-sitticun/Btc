@@ -114,7 +114,6 @@ class MultiAgentOrchestrator:
         snapshot_envelope: FrozenSnapshotEnvelope,
     ) -> AgentAttempt:
         started = time.monotonic()
-        request = _request_for(assignment, snapshot_envelope)
         decision: AIDecision | None = None
         persistence_status = AttemptPersistenceStatus.FAILED
         attempt_status = AttemptStatus.FAILED
@@ -122,6 +121,7 @@ class MultiAgentOrchestrator:
         error_message: str | None = None
 
         try:
+            request = _request_for(assignment, snapshot_envelope)
             async with self._semaphore:
                 decision = await self._invoker.invoke(assignment, request)
             snapshot = snapshot_envelope.snapshot
