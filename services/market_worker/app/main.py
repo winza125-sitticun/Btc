@@ -81,6 +81,23 @@ async def _finish_ai_task(ai_task: asyncio.Task | None) -> None:
         )
 
 
+async def _finish_multi_agent_task(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    try:
+        summary = await task
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(f"multi-agent task failed type={type(exc).__name__}")
+        return
+    if summary is not None:
+        print(
+            f"multi_agent attempted={summary.attempted} approved={summary.approved} "
+            f"rejected={summary.rejected} failed={summary.failed} skipped={summary.skipped}"
+        )
+
+
 async def run_realtime_cycle(
     *,
     scanner,
@@ -93,6 +110,7 @@ async def run_realtime_cycle(
     realtime_seconds: float,
     flush_interval_seconds: float,
     ai_runner=None,
+    multi_agent_runner=None,
 ) -> MarketScanResult:
     result = await scanner.scan(
         timeframe=timeframe,
@@ -104,6 +122,9 @@ async def run_realtime_cycle(
     ai_task = None
     if ai_runner is not None:
         ai_task = asyncio.create_task(ai_runner.analyze_scan(result, persisted))
+    multi_agent_task = None
+    if multi_agent_runner is not None:
+        multi_agent_task = asyncio.create_task(multi_agent_runner.analyze_scan(result, persisted))
 
     try:
         symbols = _select_realtime_symbols(result.candidates, realtime_symbol_limit)
@@ -125,15 +146,19 @@ async def run_realtime_cycle(
                 await repo.upsert_live_states(states)
     except asyncio.CancelledError:
         await _cancel_ai_task(ai_task)
+        await _cancel_ai_task(multi_agent_task)
         raise
     except Exception:
         await _cancel_ai_task(ai_task)
+        await _cancel_ai_task(multi_agent_task)
         raise
 
     try:
         await _finish_ai_task(ai_task)
+        await _finish_multi_agent_task(multi_agent_task)
     except asyncio.CancelledError:
         await _cancel_ai_task(ai_task)
+        await _cancel_ai_task(multi_agent_task)
         raise
     return result
 
