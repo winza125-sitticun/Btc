@@ -167,6 +167,7 @@ class VortexInputs(_FrozenModel):
     observed_at: datetime
     mapping_version: str = "vortex-input-v1"
     predecision_regime: str = Field(default="UNKNOWN", pattern=r"^(BULL|BEAR|SIDEWAYS|UNKNOWN)$")
+    reference_price: float | None = Field(default=None, gt=0)
     consensus_direction: Direction | None = None
     winning_agreement: float | None = Field(default=None, ge=0, le=1)
     hesitation_total: float | None = Field(default=None, ge=0, le=100)

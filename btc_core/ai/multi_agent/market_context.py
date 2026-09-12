@@ -65,4 +65,5 @@ def derive_market_context(snapshot_envelope: FrozenSnapshotEnvelope) -> VortexIn
         observed_at=snapshot_envelope.observed_at,
         mapping_version="vortex-input-v1",
         predecision_regime=_predecision_regime(technical),
+        reference_price=snapshot_envelope.snapshot.last_price,
     )

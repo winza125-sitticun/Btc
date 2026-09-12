@@ -425,3 +425,161 @@ class SupabaseMultiAgentRepository:
             "ai_agent_performance_snapshots",
             item.model_dump(mode="json", exclude_none=True),
         )
+
+    async def list_outcome_evaluation_candidates(self, as_of: datetime):
+        from btc_core.ai.multi_agent.performance import (
+            EvaluationHorizon,
+            MarketRegime,
+            OutcomeEvaluationCandidate,
+        )
+
+        response = await self._request(
+            "GET",
+            "/ai_agent_attempts",
+            params={
+                "select": "id,multi_agent_run_id,role,provider,model,direction,ai_multi_agent_runs!inner(symbol,started_at,market_context_summary)",
+                "status": "eq.SUCCESS",
+                "ai_multi_agent_runs.started_at": f"lte.{_iso(as_of)}",
+                "order": "created_at.asc",
+            },
+        )
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise SupabaseMultiAgentRepositoryError("candidate read did not return a list")
+        attempt_ids = [row.get("id") for row in rows if isinstance(row, dict) and isinstance(row.get("id"), int)]
+        existing: dict[int, set[EvaluationHorizon]] = {attempt_id: set() for attempt_id in attempt_ids}
+        if attempt_ids:
+            outcome_response = await self._request(
+                "GET",
+                "/ai_decision_outcomes",
+                params={
+                    "select": "agent_attempt_id,horizon",
+                    "agent_attempt_id": f"in.({','.join(str(item) for item in attempt_ids)})",
+                },
+            )
+            outcome_rows = outcome_response.json()
+            if not isinstance(outcome_rows, list):
+                raise SupabaseMultiAgentRepositoryError("outcome identity read did not return a list")
+            for row in outcome_rows:
+                if not isinstance(row, dict):
+                    continue
+                attempt_id = row.get("agent_attempt_id")
+                try:
+                    horizon = EvaluationHorizon(str(row.get("horizon")))
+                except ValueError:
+                    continue
+                if isinstance(attempt_id, int) and attempt_id in existing:
+                    existing[attempt_id].add(horizon)
+
+        result = []
+        horizon_order = (EvaluationHorizon.M15, EvaluationHorizon.H1, EvaluationHorizon.H4)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            run = row.get("ai_multi_agent_runs")
+            if not isinstance(run, dict):
+                continue
+            context = run.get("market_context_summary")
+            if not isinstance(context, dict):
+                continue
+            reference_price = context.get("reference_price")
+            if not isinstance(reference_price, (int, float)) or reference_price <= 0:
+                continue
+            started_at = datetime.fromisoformat(str(run.get("started_at")).replace("Z", "+00:00"))
+            if started_at > as_of:
+                continue
+            attempt_id = row.get("id")
+            if not isinstance(attempt_id, int):
+                continue
+            try:
+                regime = MarketRegime(str(context.get("predecision_regime", "UNKNOWN")))
+                result.append(OutcomeEvaluationCandidate(
+                    multi_agent_run_id=str(row["multi_agent_run_id"]),
+                    agent_attempt_id=attempt_id,
+                    role=AgentRole(str(row["role"])),
+                    provider=AIProvider(str(row["provider"])),
+                    model=str(row["model"]),
+                    symbol=str(run["symbol"]),
+                    direction=Direction(str(row["direction"])),
+                    started_at=started_at,
+                    reference_price=float(reference_price),
+                    market_regime=regime,
+                    existing_horizons=tuple(item for item in horizon_order if item in existing.get(attempt_id, set())),
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return tuple(result)
+
+    async def load_market_outcome_bars(self, symbol: str, timeframe: str, start: datetime, end: datetime):
+        from btc_core.ai.multi_agent.performance import MarketOutcomeBar
+
+        if end <= start:
+            raise ValueError("market outcome end must be after start")
+        response = await self._request(
+            "GET",
+            "/market_candles",
+            params={
+                "select": "symbol,timeframe,open_time,close_time,high,low,close",
+                "symbol": f"eq.{symbol}",
+                "timeframe": f"eq.{timeframe}",
+                "close_time": f"gte.{_iso(start)}",
+                "and": f"(close_time.lt.{_iso(end)})",
+                "order": "close_time.asc",
+            },
+        )
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise SupabaseMultiAgentRepositoryError("market candle read did not return a list")
+        return tuple(MarketOutcomeBar.model_validate(row) for row in rows if isinstance(row, dict))
+
+    async def list_performance_evidence(self, as_of: datetime):
+        from btc_core.ai.multi_agent.performance import MarketRegime, PerformanceEvidence
+
+        response = await self._request(
+            "GET",
+            "/ai_decision_outcomes",
+            params={
+                "select": "multi_agent_run_id,agent_attempt_id,horizon,state,data_quality,matured_at,directional_hit,signed_return_pct,market_regime,ai_agent_attempts!inner(role,provider,model,direction),ai_multi_agent_runs!inner(symbol)",
+                "state": "eq.EVALUATED",
+                "data_quality": "eq.FULL",
+                "matured_at": f"lte.{_iso(as_of)}",
+                "order": "matured_at.asc",
+            },
+        )
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise SupabaseMultiAgentRepositoryError("performance evidence read did not return a list")
+        result = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            attempt = row.get("ai_agent_attempts")
+            run = row.get("ai_multi_agent_runs")
+            if not isinstance(attempt, dict) or not isinstance(run, dict):
+                continue
+            attempt_id = row.get("agent_attempt_id")
+            if not isinstance(attempt_id, int):
+                continue
+            try:
+                matured_at = datetime.fromisoformat(str(row["matured_at"]).replace("Z", "+00:00"))
+                if matured_at > as_of:
+                    continue
+                result.append(PerformanceEvidence(
+                    multi_agent_run_id=str(row["multi_agent_run_id"]),
+                    agent_attempt_id=attempt_id,
+                    role=AgentRole(str(attempt["role"])),
+                    provider=AIProvider(str(attempt["provider"])),
+                    model=str(attempt["model"]),
+                    symbol=str(run["symbol"]),
+                    direction=Direction(str(attempt["direction"])),
+                    market_regime=MarketRegime(str(row.get("market_regime", "UNKNOWN"))),
+                    horizon=str(row["horizon"]),
+                    state=OutcomeState(str(row["state"])),
+                    data_quality=str(row["data_quality"]),
+                    matured_at=matured_at,
+                    directional_hit=row.get("directional_hit"),
+                    signed_return_pct=row.get("signed_return_pct"),
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return tuple(result)
