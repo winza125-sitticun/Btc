@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -293,6 +294,21 @@ def test_multi_agent_reader_never_falls_back_to_service_role(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "must-not-be-used")
     with pytest.raises(RuntimeError, match="SUPABASE_URL and SUPABASE_ANON_KEY"):
         dependency()
+
+
+@pytest.mark.asyncio
+async def test_reader_dependency_closes_anon_repository(monkeypatch):
+    dependency = getattr(api_main, "get_multi_agent_reader", None)
+    assert dependency is not None
+    assert inspect.isasyncgenfunction(dependency)
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+    generator = dependency()
+    repo = await anext(generator)
+    assert isinstance(repo, MultiAgentReadRepository)
+    assert repo._client.is_closed is False
+    await generator.aclose()
+    assert repo._client.is_closed is True
 
 
 @pytest.mark.asyncio
