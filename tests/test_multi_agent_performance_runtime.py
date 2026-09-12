@@ -41,8 +41,10 @@ def _envelope(d4h=Direction.LONG, d1h=Direction.SHORT, d15m=Direction.LONG):
     return FrozenSnapshotEnvelope(snapshot_ref="snap-1", observed_at=START, snapshot=snapshot)
 
 
-def test_market_context_freezes_predecision_regime_from_timeframe_directions():
-    assert derive_market_context(_envelope()).predecision_regime == "BULL"
+def test_market_context_freezes_predecision_regime_and_reference_price():
+    context = derive_market_context(_envelope())
+    assert context.predecision_regime == "BULL"
+    assert context.reference_price == 100
     assert derive_market_context(_envelope(Direction.SHORT, Direction.LONG, Direction.WAIT)).predecision_regime == "SIDEWAYS"
     assert derive_market_context(_envelope(Direction.SHORT, Direction.SHORT, Direction.LONG)).predecision_regime == "BEAR"
 
