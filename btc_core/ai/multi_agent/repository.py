@@ -18,15 +18,38 @@ from btc_core.ai.multi_agent.models import (
 )
 
 
-_SECRET_KEYS = {
-    "authorization",
+_PRIVATE_EXACT = {
+    "input_snapshot",
+    "raw_provider_body",
+    "provider_body",
+    "prompt_text",
+    "role_prompt_bundle",
     "api_key",
     "apikey",
     "api-key",
     "access_token",
-    "secret",
     "token",
+    "secret",
+    "password",
+    "authorization",
+    "auth_header",
+    "credential",
+    "credentials",
+    "webhook_url",
+    "webhook",
 }
+_PRIVATE_PARTS = ("password", "authorization", "credential")
+
+
+def _is_private_key(key: Any) -> bool:
+    normalized = str(key).strip().lower()
+    if normalized == "secret_configured":
+        return False
+    if normalized in _PRIVATE_EXACT:
+        return True
+    if any(part in normalized for part in _PRIVATE_PARTS):
+        return True
+    return normalized.endswith(("_api_key", "_access_token", "_auth_token", "_secret"))
 
 
 class _FrozenModel(BaseModel):
@@ -214,7 +237,7 @@ def _sanitize(value: Any) -> Any:
         return {
             str(key): _sanitize(item)
             for key, item in value.items()
-            if str(key).strip().lower() not in _SECRET_KEYS
+            if not _is_private_key(key)
         }
     if isinstance(value, list):
         return [_sanitize(item) for item in value]
@@ -325,12 +348,14 @@ class SupabaseMultiAgentRepository:
             "performance_algorithm_version": config.performance_version,
             "market_context_mapping_version": config.market_context_mapping_version,
         }
+        # Prompt bundles are intentionally server-only evidence, so this insert
+        # bypasses the generic metadata sanitizer while containing no credentials.
         await self._request(
             "POST",
             "/ai_multi_agent_configs",
             params={"on_conflict": "config_version"},
             headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
-            json=_sanitize(payload),
+            json=payload,
         )
         return config.config_version
 
