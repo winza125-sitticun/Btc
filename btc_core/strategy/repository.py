@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -15,6 +16,25 @@ from .order_intents import OrderIntent
 
 class StrategyRepositoryError(RuntimeError):
     pass
+
+
+def _analysis_source(source: dict[str, Any]) -> tuple[str, str]:
+    analysis_id = source.get("ai_analysis_id")
+    multi_agent_run_id = source.get("multi_agent_run_id")
+    analysis_valid = type(analysis_id) is int and analysis_id > 0
+    run_valid = False
+    if isinstance(multi_agent_run_id, str) and multi_agent_run_id.strip():
+        try:
+            multi_agent_run_id = str(UUID(multi_agent_run_id.strip()))
+            run_valid = True
+        except ValueError:
+            run_valid = False
+    if analysis_valid == run_valid:
+        raise ValueError("exactly one analysis source is required")
+    if analysis_valid:
+        return "ai_analysis_id", str(analysis_id)
+    return "multi_agent_run_id", str(multi_agent_run_id)
+
 
 class PublicBinanceKlinesFetcher:
     """Concrete, credential-free adapter for the public Binance USD-M API."""
@@ -63,17 +83,16 @@ class SupabaseStrategyRepository:
         await self._request("POST", "/market_ai_signal_outcomes", params={"on_conflict": "ai_analysis_id,horizon"}, headers={"Prefer": "resolution=merge-duplicates,return=minimal"}, json=payload)
 
     async def create_pending_trade(self, *, account_id: str, trade: dict[str, Any], idempotency_key: str, account_name: str) -> dict[str, Any]:
-        """Persist a worker-owned paper trade; replaying a key is harmless."""
+        """Persist a worker-owned paper trade; replaying a source key is harmless."""
         if not account_id or not idempotency_key or account_name != "Production Canary":
             raise ValueError("account_id and idempotency_key are required")
-        if type(trade.get("ai_analysis_id")) is not int or trade["ai_analysis_id"] <= 0:
-            raise ValueError("ai_analysis_id is required as the durable idempotency key")
+        source_column, source_value = _analysis_source(trade)
         await self._assert_system_account(account_id)
         payload = {**trade, "account_id": account_id, "status": "PENDING_ENTRY"}
-        response = await self._request("POST", "/market_simulation_trades", params={"on_conflict": "ai_analysis_id", "account_id": f"eq.{account_id}"}, headers={"Prefer": "resolution=ignore-duplicates,return=representation", "X-Idempotency-Key": idempotency_key}, json=payload)
+        response = await self._request("POST", "/market_simulation_trades", params={"on_conflict": source_column, "account_id": f"eq.{account_id}"}, headers={"Prefer": "resolution=ignore-duplicates,return=representation", "X-Idempotency-Key": idempotency_key}, json=payload)
         rows = response.json()
         if isinstance(rows, list) and rows: return rows[0]
-        existing = await self._request("GET", "/market_simulation_trades", params={"select": "*", "ai_analysis_id": f"eq.{trade['ai_analysis_id']}", "account_id": f"eq.{account_id}", "limit": "1"})
+        existing = await self._request("GET", "/market_simulation_trades", params={"select": "*", source_column: f"eq.{source_value}", "account_id": f"eq.{account_id}", "limit": "1"})
         rows = existing.json()
         return rows[0] if isinstance(rows, list) and rows else {}
 
@@ -131,7 +150,6 @@ class SupabaseStrategyRepository:
             "status": event.status, "delivery_state": event.delivery_state,
         }
         payload.pop("id", None)
-        # Explicitly avoid credentials even if a caller supplied unsafe metadata.
         def clean(value: Any) -> Any:
             if isinstance(value, dict):
                 blocked = ("token", "secret", "key", "password", "authorization", "credential", "api_key", "apikey", "auth", "oauth", "auth_header")
@@ -148,7 +166,6 @@ class SupabaseStrategyRepository:
         try:
             response = await self._request("POST", "/market_alert_events", headers={"Prefer": "return=representation"}, json=payload)
         except StrategyRepositoryError:
-            # Another worker may have inserted the same key between GET and POST.
             existing = await self._request("GET", "/market_alert_events", params={"select": "*", "dedupe_key": f"eq.{payload['dedupe_key']}", "status": "in.(NEW,ACKNOWLEDGED)", "limit": "1"})
             rows = existing.json()
             if not isinstance(rows, list) or not rows:
@@ -223,30 +240,47 @@ class SupabaseStrategyRepository:
         """Persist a dry-run intent idempotently; no exchange endpoint is used."""
         if intent.mode != "DRY_RUN" or intent.exchange_submission_allowed is not False:
             raise ValueError("only non-submittable DRY_RUN intents are permitted")
-        payload = intent.__dict__ if hasattr(intent, "__dict__") else {
-            "idempotency_key": intent.idempotency_key, "ai_analysis_id": intent.analysis_id,
-            "symbol": intent.symbol, "side": intent.side, "quantity": intent.quantity,
-            "leverage": intent.leverage, "entry_type": "LIMIT", "entry_price": sum(intent.entry) / 2,
-            "stop_loss": intent.stop_loss, "take_profit_instructions": list(intent.take_profits),
-            "risk_decision_snapshot": intent.risk_evidence, "client_intent_id": intent.idempotency_key,
-            "validation_status": "VALID", "rejection_reasons": [], "mode": "DRY_RUN",
+        payload = {
+            "idempotency_key": intent.idempotency_key,
+            "ai_analysis_id": intent.analysis_id,
+            "multi_agent_run_id": intent.multi_agent_run_id,
+            "symbol": intent.symbol,
+            "side": intent.side,
+            "quantity": intent.quantity,
+            "leverage": intent.leverage,
+            "entry_type": "LIMIT",
+            "entry_price": sum(intent.entry) / 2,
+            "stop_loss": intent.stop_loss,
+            "take_profit_instructions": list(intent.take_profits),
+            "risk_decision_snapshot": intent.risk_evidence,
+            "client_intent_id": intent.idempotency_key,
+            "validation_status": "VALID",
+            "rejection_reasons": [],
+            "mode": "DRY_RUN",
             "exchange_submission_allowed": False,
         }
-        payload.pop("id", None)
+        _analysis_source(payload)
         await self._request("POST", "/market_order_intents", params={"on_conflict": "idempotency_key"}, headers={"Prefer": "resolution=ignore-duplicates,return=representation"}, json=payload)
         return payload
 
     create_order_intent = upsert_order_intent
 
-    async def create_order_intents(self) -> list[dict[str, Any]]:
-        """Worker hook; eligible setup selection is intentionally read-only until supplied."""
+    async def create_order_intents(self, multi_agent_mode: str = "OFF") -> list[dict[str, Any]]:
+        """Worker hook; source selection remains fail closed until supplied.
+
+        The rollout mode is accepted here so the coordinator cannot accidentally
+        treat SHADOW evidence as an operational multi-agent source.
+        """
+        mode = str(getattr(multi_agent_mode, "value", multi_agent_mode) or "OFF").strip().upper()
+        if mode not in {"OFF", "SHADOW", "PRIMARY"}:
+            mode = "OFF"
         return []
     persist_order_intent = upsert_order_intent
 
     async def read_order_intents(self, *, limit: int = 100) -> list[dict[str, Any]]:
         if not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
-        response = await self._request("GET", "/market_order_intents", params={"select": "id,simulation_trade_id,ai_analysis_id,mode,symbol,side,quantity,leverage,entry_type,entry_price,stop_loss,validation_status,rejection_reasons,exchange_submission_allowed,created_at,updated_at", "order": "created_at.desc", "limit": str(limit)})
+        response = await self._request("GET", "/market_order_intents", params={"select": "id,simulation_trade_id,ai_analysis_id,multi_agent_run_id,mode,symbol,side,quantity,leverage,entry_type,entry_price,stop_loss,validation_status,rejection_reasons,exchange_submission_allowed,created_at,updated_at", "order": "created_at.desc", "limit": str(limit)})
         rows = response.json()
         return rows if isinstance(rows, list) else []
 
