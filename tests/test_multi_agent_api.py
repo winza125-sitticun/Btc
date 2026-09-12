@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import services.api.app.main as api_main
-from btc_core.ai.multi_agent.repository import SupabaseMultiAgentRepository
+from btc_core.ai.multi_agent.read_repository import MultiAgentReadRepository
 
 
 RUN_ID = "11111111-1111-4111-8111-111111111111"
@@ -323,7 +323,7 @@ async def test_repository_merges_correlated_events_in_stable_source_order():
             }])
         raise AssertionError(path)
 
-    async with SupabaseMultiAgentRepository(
+    async with MultiAgentReadRepository(
         supabase_url="https://example.supabase.co",
         api_key="anon-key",
         transport=httpx.MockTransport(handler),

@@ -1,0 +1,313 @@
+openapi: 3.1.0
+info:
+  title: BTC AI Futures Multi-Agent Read API
+  version: 0.2.0
+  description: Sanitized, read-only multi-agent decision and simulation correlation surface.
+paths:
+  /api/v1/multi-agent/config:
+    get:
+      operationId: getMultiAgentConfig
+      responses:
+        '200':
+          description: Sanitized multi-agent configuration summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MultiAgentConfigSummary'
+  /api/v1/multi-agent/latest:
+    get:
+      operationId: listLatestMultiAgentRuns
+      parameters:
+        - in: query
+          name: timeframe
+          schema: {type: string, default: 15m}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 50, default: 10}
+      responses:
+        '200':
+          description: Latest persisted multi-agent runs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/MultiAgentRunSummary'}
+  /api/v1/multi-agent/runs/{run_id}:
+    get:
+      operationId: getMultiAgentRun
+      parameters:
+        - in: path
+          name: run_id
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Multi-agent run detail.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MultiAgentRunDetail'}
+        '404': {description: Run not found}
+  /api/v1/multi-agent/events:
+    get:
+      operationId: listMultiAgentEvents
+      parameters:
+        - in: query
+          name: run_id
+          required: true
+          schema: {type: string, format: uuid}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+      responses:
+        '200':
+          description: Sanitized chronological correlated event stream.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/DashboardEvent'}
+  /api/v1/multi-agent/performance:
+    get:
+      operationId: listMultiAgentPerformance
+      parameters:
+        - in: query
+          name: role
+          schema: {$ref: '#/components/schemas/AgentRole'}
+        - in: query
+          name: symbol
+          schema: {type: string}
+        - in: query
+          name: horizon
+          schema: {$ref: '#/components/schemas/EvaluationHorizon'}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+      responses:
+        '200':
+          description: Point-in-time performance summaries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/PerformanceSummary'}
+components:
+  schemas:
+    AgentRole:
+      type: string
+      enum: [TECHNICAL, MOMENTUM, ORDER_FLOW, NEWS, CONTRARIAN, RISK_REVIEW]
+    Direction:
+      type: string
+      enum: [LONG, SHORT, WAIT, EXIT]
+    AttemptStatus:
+      type: string
+      enum: [SUCCESS, FAILED, INVALID_RESPONSE, SKIPPED]
+    RunStatus:
+      type: string
+      enum: [RUNNING, COMPLETED, PARTIAL, INSUFFICIENT_EVIDENCE, FAILED]
+    RiskStatus:
+      type: string
+      enum: [APPROVED, REJECTED, PENDING]
+    EvaluationHorizon:
+      type: string
+      enum: [15M, 1H, 4H]
+    RolloutMode:
+      type: string
+      enum: [OFF, SHADOW, PRIMARY]
+    RoleAssignmentSummary:
+      type: object
+      additionalProperties: false
+      required: [role, enabled, provider, model, base_weight, prompt_version, prompt_digest, secret_configured]
+      properties:
+        role: {$ref: '#/components/schemas/AgentRole'}
+        enabled: {type: boolean}
+        provider: {type: string}
+        model: {type: string}
+        base_weight: {type: number, exclusiveMinimum: 0}
+        prompt_version: {type: string}
+        prompt_digest: {type: string, pattern: '^[0-9a-f]{64}$'}
+        secret_configured: {type: boolean}
+    MultiAgentConfigSummary:
+      type: object
+      additionalProperties: false
+      required: [config_version, rollout_mode, min_valid_roles, min_coverage, min_agreement, min_signed_score, decision_contract_version, consensus_algorithm_version, hesitation_algorithm_version, performance_algorithm_version, roles]
+      properties:
+        config_version: {type: string, pattern: '^[0-9a-f]{64}$'}
+        rollout_mode: {$ref: '#/components/schemas/RolloutMode'}
+        min_valid_roles: {type: integer, minimum: 1, maximum: 6}
+        min_coverage: {type: number, minimum: 0, maximum: 1}
+        min_agreement: {type: number, minimum: 0, maximum: 1}
+        min_signed_score: {type: number, minimum: 0, maximum: 1}
+        decision_contract_version: {type: string}
+        consensus_algorithm_version: {type: string}
+        hesitation_algorithm_version: {type: string}
+        performance_algorithm_version: {type: string}
+        roles:
+          type: array
+          items: {$ref: '#/components/schemas/RoleAssignmentSummary'}
+    RoleContribution:
+      type: object
+      additionalProperties: false
+      required: [role, provider, model, direction, confidence, base_weight, historical_multiplier, effective_weight, unsigned_strength, signed_contribution, participated, attempt_id]
+      properties:
+        role: {$ref: '#/components/schemas/AgentRole'}
+        provider: {type: string}
+        model: {type: string}
+        direction:
+          anyOf: [{$ref: '#/components/schemas/Direction'}, {type: 'null'}]
+        confidence:
+          anyOf: [{type: number, minimum: 0, maximum: 100}, {type: 'null'}]
+        base_weight: {type: number, exclusiveMinimum: 0}
+        historical_multiplier: {type: number, minimum: 0}
+        effective_weight: {type: number, minimum: 0}
+        unsigned_strength: {type: number, minimum: 0}
+        signed_contribution: {type: number}
+        participated: {type: boolean}
+        attempt_id:
+          anyOf: [{type: integer}, {type: 'null'}]
+    HesitationBreakdown:
+      type: object
+      additionalProperties: false
+      required: [total, disagreement, confidence_dispersion, timeframe_conflict, market_uncertainty, disagreement_contribution, confidence_dispersion_contribution, timeframe_conflict_contribution, market_uncertainty_contribution, algorithm_version]
+      properties:
+        total: {type: number, minimum: 0, maximum: 100}
+        disagreement: {type: number, minimum: 0, maximum: 1}
+        confidence_dispersion: {type: number, minimum: 0, maximum: 1}
+        timeframe_conflict: {type: number, minimum: 0, maximum: 1}
+        market_uncertainty: {type: number, minimum: 0, maximum: 1}
+        disagreement_contribution: {type: number, minimum: 0, maximum: 100}
+        confidence_dispersion_contribution: {type: number, minimum: 0, maximum: 100}
+        timeframe_conflict_contribution: {type: number, minimum: 0, maximum: 100}
+        market_uncertainty_contribution: {type: number, minimum: 0, maximum: 100}
+        algorithm_version: {type: string}
+    VortexInputs:
+      type: object
+      additionalProperties: false
+      required: [trend_strength, volatility, momentum, order_flow_imbalance, liquidity, consensus_direction, winning_agreement, hesitation_total, observed_at, snapshot_ref, mapping_version]
+      properties:
+        trend_strength: {type: number, minimum: 0, maximum: 1}
+        volatility: {type: number, minimum: 0, maximum: 1}
+        momentum: {type: number, minimum: -1, maximum: 1}
+        order_flow_imbalance: {type: number, minimum: -1, maximum: 1}
+        liquidity: {type: number, minimum: 0, maximum: 1}
+        consensus_direction: {$ref: '#/components/schemas/Direction'}
+        winning_agreement: {type: number, minimum: 0, maximum: 1}
+        hesitation_total: {type: number, minimum: 0, maximum: 100}
+        observed_at: {type: string, format: date-time}
+        snapshot_ref: {type: string}
+        mapping_version: {type: string}
+    AgentAttempt:
+      type: object
+      additionalProperties: false
+      required: [id, role, provider, model, prompt_version, prompt_digest, status, direction, confidence, entry_min, entry_max, stop_loss, take_profits, risk_reward, reason_summary, latency_ms, error_code, error_message, snapshot_ref, created_at]
+      properties:
+        id: {type: integer}
+        role: {$ref: '#/components/schemas/AgentRole'}
+        provider: {type: string}
+        model: {type: string}
+        prompt_version: {type: string}
+        prompt_digest: {type: string}
+        status: {$ref: '#/components/schemas/AttemptStatus'}
+        direction: {anyOf: [{$ref: '#/components/schemas/Direction'}, {type: 'null'}]}
+        confidence: {anyOf: [{type: number}, {type: 'null'}]}
+        entry_min: {anyOf: [{type: number}, {type: 'null'}]}
+        entry_max: {anyOf: [{type: number}, {type: 'null'}]}
+        stop_loss: {anyOf: [{type: number}, {type: 'null'}]}
+        take_profits: {type: array, items: {type: number}}
+        risk_reward: {anyOf: [{type: number}, {type: 'null'}]}
+        reason_summary: {anyOf: [{type: string}, {type: 'null'}]}
+        latency_ms: {type: integer, minimum: 0}
+        error_code: {anyOf: [{type: string}, {type: 'null'}]}
+        error_message: {anyOf: [{type: string}, {type: 'null'}]}
+        snapshot_ref: {type: string}
+        created_at: {type: string, format: date-time}
+    ConsensusDecision:
+      type: object
+      additionalProperties: false
+      required: [id, direction, consensus_confidence, winning_agreement, coverage, signed_score, actionable, supporting_roles, opposing_roles, reason_codes, role_contributions, config_version, algorithm_version, hesitation, created_at]
+      properties:
+        id: {type: integer}
+        direction: {$ref: '#/components/schemas/Direction'}
+        consensus_confidence: {type: number, minimum: 0, maximum: 100}
+        winning_agreement: {type: number, minimum: 0, maximum: 1}
+        coverage: {type: number, minimum: 0, maximum: 1}
+        signed_score: {type: number, minimum: -1, maximum: 1}
+        actionable: {type: boolean}
+        supporting_roles: {type: array, items: {$ref: '#/components/schemas/AgentRole'}}
+        opposing_roles: {type: array, items: {$ref: '#/components/schemas/AgentRole'}}
+        reason_codes: {type: array, items: {type: string}}
+        role_contributions: {type: array, items: {$ref: '#/components/schemas/RoleContribution'}}
+        config_version: {type: string}
+        algorithm_version: {type: string}
+        hesitation: {$ref: '#/components/schemas/HesitationBreakdown'}
+        created_at: {type: string, format: date-time}
+    RiskResult:
+      type: object
+      additionalProperties: false
+      required: [status, approved, reason_codes, risk_policy_version, created_at]
+      properties:
+        status: {$ref: '#/components/schemas/RiskStatus'}
+        approved: {type: boolean}
+        reason_codes: {type: array, items: {type: string}}
+        risk_policy_version: {type: string}
+        created_at: {type: string, format: date-time}
+    MultiAgentRunSummary:
+      type: object
+      additionalProperties: false
+      required: [record_type, id, scanner_candidate_id, symbol, timeframe, started_at, completed_at, status, config_version, enabled_role_count, valid_role_count, rollout_mode, vortex_inputs, consensus, risk]
+      properties:
+        record_type: {type: string, const: MULTI_AGENT}
+        id: {type: string, format: uuid}
+        scanner_candidate_id: {type: integer}
+        symbol: {type: string}
+        timeframe: {type: string}
+        started_at: {type: string, format: date-time}
+        completed_at: {anyOf: [{type: string, format: date-time}, {type: 'null'}]}
+        status: {$ref: '#/components/schemas/RunStatus'}
+        config_version: {type: string}
+        enabled_role_count: {type: integer}
+        valid_role_count: {type: integer}
+        rollout_mode: {$ref: '#/components/schemas/RolloutMode'}
+        vortex_inputs: {$ref: '#/components/schemas/VortexInputs'}
+        consensus: {anyOf: [{$ref: '#/components/schemas/ConsensusDecision'}, {type: 'null'}]}
+        risk: {anyOf: [{$ref: '#/components/schemas/RiskResult'}, {type: 'null'}]}
+    MultiAgentRunDetail:
+      allOf:
+        - {$ref: '#/components/schemas/MultiAgentRunSummary'}
+        - type: object
+          required: [attempts]
+          properties:
+            attempts: {type: array, items: {$ref: '#/components/schemas/AgentAttempt'}}
+    DashboardEvent:
+      type: object
+      additionalProperties: false
+      required: [id, run_id, source, event_type, role, status, message, metadata_safe, created_at]
+      properties:
+        id: {oneOf: [{type: integer}, {type: string}]}
+        run_id: {type: string, format: uuid}
+        source: {type: string, enum: [MULTI_AGENT, ORDER_INTENT, SIMULATION]}
+        event_type: {type: string}
+        role: {anyOf: [{$ref: '#/components/schemas/AgentRole'}, {type: 'null'}]}
+        status: {type: string}
+        message: {type: string}
+        metadata_safe: {type: object, additionalProperties: true}
+        created_at: {type: string, format: date-time}
+    PerformanceSummary:
+      type: object
+      additionalProperties: false
+      required: [role, provider, model, symbol, direction, market_regime, horizon, sample_count, hit_rate, mean_signed_return_pct, normalized_expectancy, quality_score, multiplier, as_of, algorithm_version]
+      properties:
+        role: {$ref: '#/components/schemas/AgentRole'}
+        provider: {type: string}
+        model: {type: string}
+        symbol: {anyOf: [{type: string}, {type: 'null'}]}
+        direction: {anyOf: [{$ref: '#/components/schemas/Direction'}, {type: 'null'}]}
+        market_regime: {anyOf: [{type: string}, {type: 'null'}]}
+        horizon: {$ref: '#/components/schemas/EvaluationHorizon'}
+        sample_count: {type: integer, minimum: 0}
+        hit_rate: {type: number, minimum: 0, maximum: 1}
+        mean_signed_return_pct: {type: number}
+        normalized_expectancy: {type: number, minimum: 0, maximum: 1}
+        quality_score: {type: number, minimum: 0, maximum: 1}
+        multiplier: {type: number, minimum: 0.75, maximum: 1.25}
+        as_of: {type: string, format: date-time}
+        algorithm_version: {type: string}

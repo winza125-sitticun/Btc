@@ -10,6 +10,7 @@ from btc_core.ai.supabase_repo import SupabaseAIAnalysisRepository
 from btc_core.market.supabase_repo import SupabaseMarketRepository
 from btc_core.strategy.read_repository import StrategyReadRepository
 from services.api.app.config import PublicConfig, TradingMode
+from services.api.app.multi_agent_api import get_multi_agent_reader, router as multi_agent_router
 
 
 class MarketReader(Protocol):
@@ -43,6 +44,7 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+app.include_router(multi_agent_router)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
