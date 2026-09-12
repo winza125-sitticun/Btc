@@ -249,6 +249,11 @@ async def _process_run(repository: Any, run: dict[str, Any]) -> dict[str, Any] |
     run_id = str(run.get("id") or "").strip()
     if not run_id:
         return None
+    if (
+        str(run.get("rollout_mode") or "").strip().upper() != "PRIMARY"
+        or str(run.get("status") or "").strip().upper() not in {"COMPLETED", "PARTIAL"}
+    ):
+        return None
 
     existing = await _latest(
         repository,
