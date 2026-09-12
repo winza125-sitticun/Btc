@@ -28,6 +28,7 @@ _PENDING_CONTEXT_REASON = "FULL_RISK_CONTEXT_PENDING"
 _DEFAULT_PAPER_LEVERAGE = 1.0
 _DEFAULT_TARGET_RISK_PERCENT = 0.5
 _DEFAULT_ENTRY_VALIDITY_MINUTES = 60
+_FLOAT_TOLERANCE = 1e-9
 
 
 def _float(value: Any) -> float | None:
@@ -41,6 +42,12 @@ def _float(value: Any) -> float | None:
 def _positive(value: Any) -> float | None:
     result = _float(value)
     return result if result is not None and result > 0 else None
+
+
+def _close(left: Any, right: Any) -> bool:
+    a = _float(left)
+    b = _float(right)
+    return a is not None and b is not None and abs(a - b) <= _FLOAT_TOLERANCE
 
 
 def _valid_geometry(attempt: Mapping[str, Any], side: str) -> dict[str, Any] | None:
@@ -154,6 +161,65 @@ def _full_risk_reason(reason: str) -> str:
     return f"FULL_RISK_{reason.upper()}"
 
 
+def _recoverable_existing_intent(
+    existing: Mapping[str, Any],
+    *,
+    current_intent: Any,
+    geometry: Mapping[str, Any],
+    symbol: str,
+    side: str,
+) -> dict[str, Any] | None:
+    """Return immutable persisted execution values when an orphan intent is safe to recover."""
+    if (
+        str(existing.get("mode") or "").strip().upper() != "DRY_RUN"
+        or existing.get("exchange_submission_allowed") is not False
+        or str(existing.get("validation_status") or "").strip().upper() != "VALID"
+        or str(existing.get("symbol") or "").strip().upper() != symbol
+        or str(existing.get("side") or "").strip().upper() != side
+    ):
+        return None
+    idempotency_key = str(existing.get("idempotency_key") or "").strip()
+    quantity = _positive(existing.get("quantity"))
+    leverage = _positive(existing.get("leverage"))
+    if (
+        not idempotency_key
+        or quantity is None
+        or leverage is None
+        or quantity - current_intent.quantity > _FLOAT_TOLERANCE
+        or leverage - current_intent.leverage > _FLOAT_TOLERANCE
+    ):
+        return None
+
+    expected_mid = (float(geometry["entry_min"]) + float(geometry["entry_max"])) / 2
+    raw_tps = existing.get("take_profit_instructions") or []
+    if not isinstance(raw_tps, list) or len(raw_tps) != len(geometry["take_profits"]):
+        return None
+    if (
+        not _close(existing.get("entry_price"), expected_mid)
+        or not _close(existing.get("stop_loss"), geometry["stop_loss"])
+        or any(not _close(actual, expected) for actual, expected in zip(raw_tps, geometry["take_profits"]))
+    ):
+        return None
+
+    evidence = existing.get("risk_decision_snapshot")
+    if not isinstance(evidence, Mapping) or evidence.get("approved") is not True:
+        return None
+    if (
+        str(evidence.get("geometry_role") or "").strip().upper() != geometry["selected_role"]
+        or evidence.get("geometry_attempt_id") != geometry["selected_attempt_id"]
+    ):
+        return None
+    risk_amount = abs(expected_mid - float(geometry["stop_loss"])) * quantity
+    if risk_amount <= 0:
+        return None
+    return {
+        "idempotency_key": idempotency_key,
+        "quantity": quantity,
+        "leverage": leverage,
+        "risk_amount": risk_amount,
+    }
+
+
 async def _append_resolved_risk(
     repository: Any,
     *,
@@ -188,7 +254,7 @@ async def _process_run(repository: Any, run: dict[str, Any]) -> dict[str, Any] |
         repository,
         "/market_order_intents",
         {
-            "select": "id,simulation_trade_id,multi_agent_run_id",
+            "select": "id,idempotency_key,simulation_trade_id,multi_agent_run_id,symbol,side,quantity,leverage,entry_price,stop_loss,take_profit_instructions,risk_decision_snapshot,validation_status,mode,exchange_submission_allowed",
             "multi_agent_run_id": f"eq.{run_id}",
         },
     )
@@ -347,7 +413,7 @@ async def _process_run(repository: Any, run: dict[str, Any]) -> dict[str, Any] |
         "consensus_confidence": consensus_confidence,
         "opportunity_score": opportunity_score,
     }
-    intent = generate_order_intent(
+    current_intent = generate_order_intent(
         setup,
         context,
         policy,
@@ -355,31 +421,49 @@ async def _process_run(repository: Any, run: dict[str, Any]) -> dict[str, Any] |
         target_risk_percent=_DEFAULT_TARGET_RISK_PERCENT,
         multi_agent_mode="PRIMARY",
     )
-    if intent is None:
+    if current_intent is None:
         return None
 
     signal_created_at = _parse_time(run.get("completed_at")) or _parse_time(run.get("started_at"))
     if signal_created_at is None:
         return None
-    await repository.upsert_order_intent(intent)
+
+    if existing is None:
+        await repository.upsert_order_intent(current_intent)
+        execution = {
+            "idempotency_key": current_intent.idempotency_key,
+            "quantity": current_intent.quantity,
+            "leverage": current_intent.leverage,
+            "risk_amount": current_intent.risk_evidence["risk_amount"],
+        }
+    else:
+        execution = _recoverable_existing_intent(
+            existing,
+            current_intent=current_intent,
+            geometry=geometry,
+            symbol=symbol,
+            side=side,
+        )
+        if execution is None:
+            return None
 
     trade = await repository.create_pending_trade(
         account_id=str(account["id"]),
         account_name="Production Canary",
-        idempotency_key=intent.idempotency_key,
+        idempotency_key=execution["idempotency_key"],
         trade={
             "ai_analysis_id": None,
             "multi_agent_run_id": run_id,
             "scanner_candidate_id": candidate_id,
             "symbol": symbol,
             "side": side,
-            "planned_entry_min": intent.entry_min,
-            "planned_entry_max": intent.entry_max,
-            "quantity": intent.quantity,
-            "leverage": intent.leverage,
-            "risk_amount": intent.risk_evidence["risk_amount"],
-            "stop_loss": intent.stop_loss,
-            "take_profits": list(intent.take_profits),
+            "planned_entry_min": geometry["entry_min"],
+            "planned_entry_max": geometry["entry_max"],
+            "quantity": execution["quantity"],
+            "leverage": execution["leverage"],
+            "risk_amount": execution["risk_amount"],
+            "stop_loss": geometry["stop_loss"],
+            "take_profits": list(geometry["take_profits"]),
             "expires_at": (signal_created_at + timedelta(minutes=_DEFAULT_ENTRY_VALIDITY_MINUTES)).isoformat(),
             "full_risk_approved": True,
             "full_risk_reasons": [],
@@ -390,7 +474,7 @@ async def _process_run(repository: Any, run: dict[str, Any]) -> dict[str, Any] |
         await repository._request(
             "PATCH",
             "/market_order_intents",
-            params={"idempotency_key": f"eq.{intent.idempotency_key}"},
+            params={"idempotency_key": f"eq.{execution['idempotency_key']}"},
             headers={"Prefer": "return=minimal"},
             json={"simulation_trade_id": trade_id},
         )
@@ -398,7 +482,7 @@ async def _process_run(repository: Any, run: dict[str, Any]) -> dict[str, Any] |
         "multi_agent_run_id": run_id,
         "selected_role": geometry["selected_role"],
         "simulation_trade_id": trade_id,
-        "idempotency_key": intent.idempotency_key,
+        "idempotency_key": execution["idempotency_key"],
     }
 
 
