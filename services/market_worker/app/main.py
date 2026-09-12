@@ -12,6 +12,7 @@ from btc_core.ai.multi_agent.config import load_multi_agent_config, resolve_mult
 from btc_core.ai.multi_agent.invocation import RoleAwareProviderInvoker
 from btc_core.ai.multi_agent.models import FrozenRoleAssignment, RolloutMode
 from btc_core.ai.multi_agent.orchestrator import MultiAgentOrchestrator
+from btc_core.ai.multi_agent.performance import MultiAgentPerformanceService
 from btc_core.ai.multi_agent.repository import SupabaseMultiAgentRepository
 from btc_core.ai.multi_agent.scan_runner import MultiAgentScanRunner
 from btc_core.ai.orchestrator import AIAnalysisRunner
@@ -162,6 +163,7 @@ async def _build_multi_agent_runner(
                 maximum=6,
             ),
         )
+        performance_service = MultiAgentPerformanceService(repository)
         snapshot_builder = partial(
             build_ai_snapshot,
             market_client=market_client,
@@ -171,6 +173,7 @@ async def _build_multi_agent_runner(
             orchestrator=orchestrator,
             config=config,
             snapshot_builder=snapshot_builder,
+            performance_service=performance_service,
             candidate_limit=_mapping_int(
                 env,
                 "AI_MULTI_AGENT_CANDIDATE_LIMIT",
