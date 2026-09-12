@@ -11,7 +11,7 @@ from btc_core.ai.analysis import AIAnalysisSnapshot
 from btc_core.ai.multi_agent.market_context import derive_market_context
 from btc_core.ai.multi_agent.models import AgentRole, FrozenConfigSnapshot, FrozenSnapshotEnvelope, RolloutMode
 from btc_core.ai.multi_agent.orchestrator import MultiAgentOrchestrator
-from btc_core.ai.multi_agent.repository import MultiAgentRunRecord
+from btc_core.ai.multi_agent.repository import MultiAgentRunRecord, RiskResultStatus
 from btc_core.market.scanner import MarketScanResult, MarketScannerCandidate
 from btc_core.market.supabase_repo import PersistedScanRef
 
@@ -31,6 +31,7 @@ class MultiAgentScanSummary(BaseModel):
     attempted: int = Field(default=0, ge=0)
     approved: int = Field(default=0, ge=0)
     rejected: int = Field(default=0, ge=0)
+    pending: int = Field(default=0, ge=0)
     failed: int = Field(default=0, ge=0)
     skipped: int = Field(default=0, ge=0)
 
@@ -119,6 +120,7 @@ class MultiAgentScanRunner:
 
         approved = 0
         rejected = 0
+        pending = 0
         failed = 0
         performance_refreshed = False
         for candidate, persisted in selected:
@@ -161,8 +163,10 @@ class MultiAgentScanRunner:
                     snapshot_envelope=envelope,
                     historical_weights=historical_weights,
                 )
-                if outcome.risk.approved:
+                if outcome.risk.status is RiskResultStatus.APPROVED:
                     approved += 1
+                elif outcome.risk.status is RiskResultStatus.PENDING:
+                    pending += 1
                 else:
                     rejected += 1
             except Exception:
@@ -172,6 +176,7 @@ class MultiAgentScanRunner:
             attempted=len(selected),
             approved=approved,
             rejected=rejected,
+            pending=pending,
             failed=failed,
             skipped=skipped,
         )
