@@ -27,7 +27,7 @@ def _envelope() -> FrozenSnapshotEnvelope:
     }
     snapshot = AIAnalysisSnapshot(
         symbol="BTCUSDT", timeframe="15m", scanner_direction=Direction.LONG,
-        opportunity_score=70,
+        opportunity_score=80,
         components=OpportunityInputs(technical=80, momentum=70, volume=60, order_flow=50, open_interest=40, funding=50, liquidity=90, news=50, macro=50, risk_reward=50),
         last_price=100, funding_rate=0.0001, open_interest_change_percent=1.0,
         long_short_ratio=1.2, spread_percent=0.05,
@@ -91,6 +91,7 @@ class RecordingRepository:
     def __init__(self):
         self.calls = []
         self.attempts = []
+        self.risks = []
         self.finalized = None
 
     async def ensure_config_snapshot(self, config):
@@ -113,6 +114,11 @@ class RecordingRepository:
     async def append_hesitation(self, hesitation):
         self.calls.append("hesitation")
         return 201
+
+    async def append_risk_result(self, risk):
+        self.calls.append("risk")
+        self.risks.append(risk)
+        return 301
 
     async def finalize_run(self, run_id, *, status, completed_at, valid_role_count):
         self.calls.append("finalize")
@@ -188,10 +194,13 @@ async def test_orchestrator_uses_same_snapshot_role_prompts_bounded_concurrency_
 
     consensus_index = repository.calls.index("consensus")
     hesitation_index = repository.calls.index("hesitation")
+    risk_index = repository.calls.index("risk")
     assert all(index < consensus_index for index, call in enumerate(repository.calls) if call.startswith("attempt:"))
-    assert consensus_index < hesitation_index < repository.calls.index("finalize")
+    assert consensus_index < hesitation_index < risk_index < repository.calls.index("finalize")
     assert repository.finalized == ("run-t004", RunStatus.PARTIAL, 5)
     assert result.status is RunStatus.PARTIAL
     assert result.valid_role_count == 5
     assert result.consensus.actionable is True
     assert result.hesitation.total >= 0
+    assert result.risk.approved is True
+    assert repository.risks[0].approved is True

@@ -29,6 +29,10 @@ def test_config_snapshot_contains_no_secrets_and_has_required_versions():
     assert frozen.min_coverage == 0.67
     assert frozen.min_agreement == 0.60
     assert frozen.min_signed_score == 0.25
+    assert frozen.risk_min_consensus_confidence == 75.0
+    assert frozen.risk_max_hesitation == 50.0
+    assert frozen.risk_min_opportunity_score == 75.0
+    assert frozen.risk_policy_version == "multi-agent-risk-v1"
     assert frozen.decision_contract_version == "aid-v1"
     assert frozen.consensus_version == "consensus-v1"
     assert frozen.hesitation_version == "hesitation-v1"
@@ -52,6 +56,9 @@ def test_config_version_ignores_secret_value_but_tracks_sanitized_config():
     first = load_multi_agent_config({**base, "GEMINI_API_KEY": "secret-a"}).to_frozen_snapshot()
     second = load_multi_agent_config({**base, "GEMINI_API_KEY": "secret-b"}).to_frozen_snapshot()
     changed = load_multi_agent_config({**base, "AI_ROLE_TECHNICAL_MODEL": "gemini-other", "GEMINI_API_KEY": "secret-a"}).to_frozen_snapshot()
+    risk_changed = load_multi_agent_config({**base, "AI_MULTI_AGENT_RISK_MAX_HESITATION": "40", "GEMINI_API_KEY": "secret-a"}).to_frozen_snapshot()
     assert first.config_version == second.config_version
     assert first.config_version != changed.config_version
+    assert first.config_version != risk_changed.config_version
+    assert risk_changed.risk_max_hesitation == 40.0
     assert len(first.config_version) == 64
