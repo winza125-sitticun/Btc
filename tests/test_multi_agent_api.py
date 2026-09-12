@@ -286,14 +286,16 @@ def test_performance_endpoint_preserves_segmentation(client):
     assert item["algorithm_version"] == "performance-v1"
 
 
-def test_multi_agent_reader_never_falls_back_to_service_role(monkeypatch):
+@pytest.mark.asyncio
+async def test_multi_agent_reader_never_falls_back_to_service_role(monkeypatch):
     dependency = getattr(api_main, "get_multi_agent_reader", None)
     assert dependency is not None
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "must-not-be-used")
+    generator = dependency()
     with pytest.raises(RuntimeError, match="SUPABASE_URL and SUPABASE_ANON_KEY"):
-        dependency()
+        await anext(generator)
 
 
 @pytest.mark.asyncio
