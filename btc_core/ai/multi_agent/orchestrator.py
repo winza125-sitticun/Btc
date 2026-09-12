@@ -28,7 +28,13 @@ from btc_core.ai.multi_agent.repository import (
     HesitationRecord,
     MultiAgentRepository,
     MultiAgentRunRecord,
+    RiskResultRecord,
     RunStatus,
+)
+from btc_core.ai.multi_agent.risk_gate import (
+    MultiAgentRiskDecision,
+    MultiAgentRiskPolicy,
+    evaluate_multi_agent_risk,
 )
 from btc_core.ai.providers.base import AIProviderError
 
@@ -50,6 +56,7 @@ class MultiAgentOrchestrationResult(BaseModel):
     attempts: tuple[AgentAttempt, ...]
     consensus: ConsensusDecision
     hesitation: HesitationSnapshot
+    risk: MultiAgentRiskDecision
 
 
 def _utcnow() -> datetime:
@@ -219,6 +226,23 @@ class MultiAgentOrchestrator:
                 created_at=_utcnow(),
             )
         )
+        risk = evaluate_multi_agent_risk(
+            consensus=consensus,
+            hesitation=hesitation,
+            snapshot_envelope=snapshot_envelope,
+            policy=MultiAgentRiskPolicy.from_config(config),
+        )
+        await self._repository.append_risk_result(
+            RiskResultRecord(
+                multi_agent_run_id=run_id,
+                consensus_id=consensus_id,
+                status=risk.status,
+                approved=risk.approved,
+                reason_codes=risk.reason_codes,
+                risk_policy_version=risk.risk_policy_version,
+                created_at=_utcnow(),
+            )
+        )
 
         valid_role_count = sum(item.status is AttemptStatus.SUCCESS for item in attempts)
         status = _terminal_status(
@@ -239,4 +263,5 @@ class MultiAgentOrchestrator:
             attempts=attempts,
             consensus=consensus,
             hesitation=hesitation,
+            risk=risk,
         )

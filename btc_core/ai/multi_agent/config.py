@@ -109,6 +109,15 @@ def load_multi_agent_config(env: Mapping[str, str]) -> MultiAgentConfig:
         min_coverage=_float_value(env, "AI_MULTI_AGENT_MIN_COVERAGE", 0.67),
         min_agreement=_float_value(env, "AI_MULTI_AGENT_MIN_AGREEMENT", 0.60),
         min_signed_score=_float_value(env, "AI_MULTI_AGENT_MIN_SIGNED_SCORE", 0.25),
+        risk_min_consensus_confidence=_float_value(
+            env, "AI_MULTI_AGENT_RISK_MIN_CONFIDENCE", 75.0
+        ),
+        risk_max_hesitation=_float_value(
+            env, "AI_MULTI_AGENT_RISK_MAX_HESITATION", 50.0
+        ),
+        risk_min_opportunity_score=_float_value(
+            env, "AI_MULTI_AGENT_RISK_MIN_OPPORTUNITY_SCORE", 75.0
+        ),
         diagnostics=tuple(diagnostics),
     )
 
@@ -120,6 +129,10 @@ def _canonical_payload(config: MultiAgentConfig, assignments: tuple[FrozenRoleAs
         "min_coverage": config.min_coverage,
         "min_agreement": config.min_agreement,
         "min_signed_score": config.min_signed_score,
+        "risk_min_consensus_confidence": config.risk_min_consensus_confidence,
+        "risk_max_hesitation": config.risk_max_hesitation,
+        "risk_min_opportunity_score": config.risk_min_opportunity_score,
+        "risk_policy_version": config.risk_policy_version,
         "decision_contract_version": config.decision_contract_version,
         "consensus_version": config.consensus_version,
         "hesitation_version": config.hesitation_version,
@@ -159,6 +172,10 @@ def freeze_multi_agent_config(config: MultiAgentConfig) -> FrozenConfigSnapshot:
         min_coverage=config.min_coverage,
         min_agreement=config.min_agreement,
         min_signed_score=config.min_signed_score,
+        risk_min_consensus_confidence=config.risk_min_consensus_confidence,
+        risk_max_hesitation=config.risk_max_hesitation,
+        risk_min_opportunity_score=config.risk_min_opportunity_score,
+        risk_policy_version=config.risk_policy_version,
         decision_contract_version=config.decision_contract_version,
         consensus_version=config.consensus_version,
         hesitation_version=config.hesitation_version,

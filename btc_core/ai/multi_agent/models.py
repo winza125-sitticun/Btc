@@ -75,6 +75,10 @@ class FrozenConfigSnapshot(_FrozenModel):
     min_coverage: float = Field(default=0.67, ge=0, le=1)
     min_agreement: float = Field(default=0.60, ge=0, le=1)
     min_signed_score: float = Field(default=0.25, ge=0, le=1)
+    risk_min_consensus_confidence: float = Field(default=75.0, ge=0, le=100)
+    risk_max_hesitation: float = Field(default=50.0, ge=0, le=100)
+    risk_min_opportunity_score: float = Field(default=75.0, ge=0, le=100)
+    risk_policy_version: str = Field(default="multi-agent-risk-v1", min_length=1, max_length=100)
     decision_contract_version: str = "aid-v1"
     consensus_version: str = "consensus-v1"
     hesitation_version: str = "hesitation-v1"
@@ -174,6 +178,10 @@ class MultiAgentConfig(_FrozenModel):
     min_coverage: float = Field(default=0.67, ge=0, le=1)
     min_agreement: float = Field(default=0.60, ge=0, le=1)
     min_signed_score: float = Field(default=0.25, ge=0, le=1)
+    risk_min_consensus_confidence: float = Field(default=75.0, ge=0, le=100)
+    risk_max_hesitation: float = Field(default=50.0, ge=0, le=100)
+    risk_min_opportunity_score: float = Field(default=75.0, ge=0, le=100)
+    risk_policy_version: str = Field(default="multi-agent-risk-v1", min_length=1, max_length=100)
     decision_contract_version: str = "aid-v1"
     consensus_version: str = "consensus-v1"
     hesitation_version: str = "hesitation-v1"
