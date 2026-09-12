@@ -25,10 +25,12 @@ from btc_core.ai.multi_agent.repository import (
     AgentAttemptRecord,
     AttemptPersistenceStatus,
     ConsensusRecord,
+    DashboardEventRecord,
     HesitationRecord,
     MultiAgentRepository,
     MultiAgentRunRecord,
     RiskResultRecord,
+    RiskResultStatus,
     RunStatus,
 )
 from btc_core.ai.multi_agent.risk_gate import (
@@ -37,6 +39,8 @@ from btc_core.ai.multi_agent.risk_gate import (
     evaluate_multi_agent_risk,
 )
 from btc_core.ai.providers.base import AIProviderError
+from btc_core.risk.engine import RiskPolicy
+from btc_core.strategy.risk import FullRiskContext
 
 
 class RoleAwareInvokerProtocol(Protocol):
@@ -179,6 +183,31 @@ class MultiAgentOrchestrator:
             confidence=decision.confidence if decision else None,
         )
 
+    async def _event(
+        self,
+        *,
+        run_id: str,
+        sequence: int,
+        event_type: str,
+        status: str,
+        message: str,
+        role=None,
+        metadata_safe: dict | None = None,
+    ) -> int:
+        await self._repository.append_event(
+            DashboardEventRecord(
+                multi_agent_run_id=run_id,
+                sequence=sequence,
+                event_type=event_type,
+                role=role,
+                status=status,
+                message=message,
+                metadata_safe=metadata_safe or {},
+                created_at=_utcnow(),
+            )
+        )
+        return sequence + 1
+
     async def orchestrate(
         self,
         *,
@@ -186,6 +215,8 @@ class MultiAgentOrchestrator:
         config: FrozenConfigSnapshot,
         snapshot_envelope: FrozenSnapshotEnvelope,
         historical_weights: Mapping[object, float],
+        full_risk_context: FullRiskContext | None = None,
+        full_risk_policy: RiskPolicy | None = None,
     ) -> MultiAgentOrchestrationResult:
         if run.config_version != config.config_version:
             raise ValueError("run config_version must match frozen config")
@@ -196,6 +227,21 @@ class MultiAgentOrchestrator:
 
         await self._repository.ensure_config_snapshot(config)
         run_id = await self._repository.create_run(run)
+        sequence = await self._event(
+            run_id=run_id,
+            sequence=1,
+            event_type="RUN_STARTED",
+            status=RunStatus.RUNNING.value,
+            message="Multi-agent run started",
+            metadata_safe={
+                "symbol": run.symbol,
+                "timeframe": run.timeframe,
+                "enabled_role_count": run.enabled_role_count,
+                "rollout_mode": run.rollout_mode.value,
+                "config_version": run.config_version,
+                "snapshot_ref": run.snapshot_ref,
+            },
+        )
 
         attempts = tuple(
             await asyncio.gather(
@@ -209,6 +255,23 @@ class MultiAgentOrchestrator:
                 )
             )
         )
+        for attempt in attempts:
+            sequence = await self._event(
+                run_id=run_id,
+                sequence=sequence,
+                event_type="AGENT_ATTEMPT",
+                status=attempt.status.value,
+                message=f"{attempt.role.value} attempt {attempt.status.value.lower()}",
+                role=attempt.role,
+                metadata_safe={
+                    "attempt_id": attempt.attempt_id,
+                    "provider": attempt.provider.value,
+                    "model": attempt.model,
+                    "direction": attempt.direction.value if attempt.direction else None,
+                    "confidence": attempt.confidence,
+                },
+            )
+
         consensus = build_consensus(attempts, config, historical_weights)
         consensus_id = await self._repository.append_consensus(
             ConsensusRecord(
@@ -217,6 +280,23 @@ class MultiAgentOrchestrator:
                 created_at=_utcnow(),
             )
         )
+        sequence = await self._event(
+            run_id=run_id,
+            sequence=sequence,
+            event_type="CONSENSUS",
+            status="ACTIONABLE" if consensus.actionable else "WAIT",
+            message=f"Consensus {consensus.direction.value}",
+            metadata_safe={
+                "consensus_id": consensus_id,
+                "direction": consensus.direction.value,
+                "consensus_confidence": consensus.consensus_confidence,
+                "winning_agreement": consensus.winning_agreement,
+                "coverage": consensus.coverage,
+                "actionable": consensus.actionable,
+                "reason_codes": list(consensus.reason_codes),
+            },
+        )
+
         hesitation = calculate_hesitation(attempts, consensus, snapshot_envelope)
         await self._repository.append_hesitation(
             HesitationRecord(
@@ -226,11 +306,28 @@ class MultiAgentOrchestrator:
                 created_at=_utcnow(),
             )
         )
+        sequence = await self._event(
+            run_id=run_id,
+            sequence=sequence,
+            event_type="HESITATION",
+            status="RECORDED",
+            message="Hesitation factors recorded",
+            metadata_safe={
+                "total": hesitation.total,
+                "disagreement": hesitation.disagreement,
+                "confidence_dispersion": hesitation.confidence_dispersion,
+                "timeframe_conflict": hesitation.timeframe_conflict,
+                "market_uncertainty": hesitation.market_uncertainty,
+            },
+        )
+
         risk = evaluate_multi_agent_risk(
             consensus=consensus,
             hesitation=hesitation,
             snapshot_envelope=snapshot_envelope,
             policy=MultiAgentRiskPolicy.from_config(config),
+            full_risk_context=full_risk_context,
+            full_risk_policy=full_risk_policy,
         )
         await self._repository.append_risk_result(
             RiskResultRecord(
@@ -242,6 +339,23 @@ class MultiAgentOrchestrator:
                 risk_policy_version=risk.risk_policy_version,
                 created_at=_utcnow(),
             )
+        )
+        risk_event_type = {
+            RiskResultStatus.APPROVED: "RISK_APPROVED",
+            RiskResultStatus.REJECTED: "RISK_REJECTED",
+            RiskResultStatus.PENDING: "RISK_PENDING",
+        }[risk.status]
+        sequence = await self._event(
+            run_id=run_id,
+            sequence=sequence,
+            event_type=risk_event_type,
+            status=risk.status.value,
+            message=f"Deterministic risk {risk.status.value.lower()}",
+            metadata_safe={
+                "approved": risk.approved,
+                "reason_codes": list(risk.reason_codes),
+                "risk_policy_version": risk.risk_policy_version,
+            },
         )
 
         valid_role_count = sum(item.status is AttemptStatus.SUCCESS for item in attempts)
@@ -255,6 +369,18 @@ class MultiAgentOrchestrator:
             status=status,
             completed_at=_utcnow(),
             valid_role_count=valid_role_count,
+        )
+        await self._event(
+            run_id=run_id,
+            sequence=sequence,
+            event_type="RUN_FINALIZED",
+            status=status.value,
+            message=f"Multi-agent run finalized as {status.value}",
+            metadata_safe={
+                "valid_role_count": valid_role_count,
+                "enabled_role_count": len(config.assignments),
+                "risk_status": risk.status.value,
+            },
         )
         return MultiAgentOrchestrationResult(
             run_id=run_id,
