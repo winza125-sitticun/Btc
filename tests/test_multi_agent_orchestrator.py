@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 
 import pytest
+from pydantic import ValidationError
 
 from btc_core.ai.analysis import AINewsContext, AIAnalysisSnapshot, TimeframeTechnicalContext
 from btc_core.ai.models import AIDecision, AIProvider, Direction
@@ -164,6 +165,29 @@ class RecordingInvoker:
             self.active -= 1
 
 
+class SchemaFailureInvoker(RecordingInvoker):
+    async def invoke(self, assignment, request):
+        if assignment.role is AgentRole.TECHNICAL:
+            try:
+                AIDecision.model_validate(
+                    {
+                        "provider": assignment.provider,
+                        "model": assignment.model,
+                        "symbol": request.snapshot_envelope.snapshot.symbol,
+                        "timeframe": request.snapshot_envelope.snapshot.timeframe,
+                        "direction": "LONG",
+                        "confidence": 80,
+                        "reason_summary": "RAW_SENTINEL_123",
+                    }
+                )
+            except ValidationError as exc:
+                raise AIProviderError(
+                    "Gemini decision failed schema validation",
+                    code="INVALID_SCHEMA",
+                ) from exc
+        return await super().invoke(assignment, request)
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_uses_same_snapshot_role_prompts_bounded_concurrency_and_isolates_provider_failure():
     envelope = _envelope()
@@ -224,3 +248,30 @@ async def test_orchestrator_uses_same_snapshot_role_prompts_bounded_concurrency_
         "RISK_PENDING",
         "RUN_FINALIZED",
     ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_persists_bounded_schema_diagnostic_without_raw_payload():
+    envelope = _envelope()
+    config = _config()
+    repository = RecordingRepository()
+    orchestrator = MultiAgentOrchestrator(
+        repository=repository,
+        invoker=SchemaFailureInvoker(),
+        max_concurrency=2,
+    )
+
+    result = await orchestrator.orchestrate(
+        run=_run(config, envelope),
+        config=config,
+        snapshot_envelope=envelope,
+        historical_weights={},
+    )
+
+    failed = next(item for item in repository.attempts if item.role is AgentRole.TECHNICAL)
+    assert failed.status.value == "INVALID_RESPONSE"
+    assert failed.error_code == "INVALID_SCHEMA_GEOMETRY"
+    assert failed.error_message == "Gemini decision failed schema validation"
+    assert "RAW_SENTINEL_123" not in failed.error_message
+    assert result.status is RunStatus.PARTIAL
+    assert result.valid_role_count == 5
