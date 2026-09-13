@@ -74,8 +74,18 @@ async def test_gemini_uses_configured_model_and_structured_json_output():
         assert '"exclusiveMaximum"' not in encoded_schema
         assert '"minLength"' not in encoded_schema
         assert '"maxLength"' not in encoded_schema
-        assert schema["properties"]["entry_min"]["minimum"] == 0
-        assert schema["properties"]["take_profits"]["minItems"] == 1
+
+        entry_schema = schema["properties"]["entry_min"]
+        numeric_entry_schema = next(
+            option for option in entry_schema["anyOf"] if option.get("type") == "number"
+        )
+        assert numeric_entry_schema["minimum"] == 0
+        assert "entry_min" not in schema["required"]
+        assert "entry_max" not in schema["required"]
+        assert "stop_loss" not in schema["required"]
+        assert "risk_reward" not in schema["required"]
+        assert "take_profits" not in schema["required"]
+        assert "minItems" not in schema["properties"]["take_profits"]
         assert schema["properties"]["take_profits"]["maxItems"] == 5
 
         return httpx.Response(200, json=success_body())
