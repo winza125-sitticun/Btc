@@ -55,6 +55,17 @@ Implemented contracts and runtime paths for:
 21. AI decision persistence linked to live `market_scanner_candidates` records
 22. Sanitized `GET /api/v1/ai/latest` read path using the Supabase anon key
 23. Read-only AI Settings state and AI analysis cards in the web app
+24. Multi-agent role orchestration with frozen versioned config/prompt evidence
+25. Deterministic consensus, hesitation, point-in-time performance weighting and deterministic risk authority
+26. OFF/SHADOW/PRIMARY market-worker rollout with fail-closed precedence
+27. Multi-agent-to-DRY_RUN order-intent and simulation correlation
+28. Sanitized OpenAPI-backed multi-agent read API and non-3D explainability dashboard
+29. Fixed dashboard polling/stale/retry contract backed by persisted state
+30. T012 reproducibility/safety/compatibility release gate and rollback runbook
+
+The optional T011 Vortex/3D visualization was intentionally omitted by product decision. The non-3D explainability dashboard is the final UI for this milestone.
+
+Operational rollout and rollback instructions: `docs/operations/multi-agent-vortex-rollout.md`.
 
 Live orders remain out of scope until simulation and testnet gates are validated.
 
@@ -131,6 +142,20 @@ GET /api/v1/config/public
 `/api/v1/config/public` reports provider/model and whether an API key is configured, but never returns the key itself. The API read dependency uses `SUPABASE_ANON_KEY`; it does not fall back to the service-role key.
 
 The web Scanner view can display AI direction, confidence, Entry, SL, TP, R:R, provider/model, reason summary and deterministic precheck status. `FULL_RISK_CONTEXT_PENDING` is displayed as pending/not trade-authorized, never as an approval badge.
+
+## Multi-agent read API
+
+The sanitized multi-agent read surface is read-only:
+
+```text
+GET /api/v1/multi-agent/config
+GET /api/v1/multi-agent/latest
+GET /api/v1/multi-agent/runs/{run_id}
+GET /api/v1/multi-agent/events
+GET /api/v1/multi-agent/performance
+```
+
+Consensus confidence/agreement is displayed separately from the deterministic risk state. Browser configuration is read-only and provider credentials are never returned.
 
 ## Run backend tests
 

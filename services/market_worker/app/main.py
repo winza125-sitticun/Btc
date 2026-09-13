@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from functools import partial
 import os
 import time
 
 from btc_core.ai.models import AIProvider
+from btc_core.ai.multi_agent.config import load_multi_agent_config, resolve_multi_agent_mode
+from btc_core.ai.multi_agent.invocation import RoleAwareProviderInvoker
+from btc_core.ai.multi_agent.models import FrozenRoleAssignment, RolloutMode
+from btc_core.ai.multi_agent.orchestrator import MultiAgentOrchestrator
+from btc_core.ai.multi_agent.performance import MultiAgentPerformanceService
+from btc_core.ai.multi_agent.repository import SupabaseMultiAgentRepository
+from btc_core.ai.multi_agent.scan_runner import MultiAgentScanRunner
 from btc_core.ai.orchestrator import AIAnalysisRunner
 from btc_core.ai.providers.base import AIProviderRuntimeConfig
 from btc_core.ai.providers.factory import build_provider_client
@@ -22,6 +30,14 @@ from btc_core.risk.engine import RiskPolicy
 
 
 CORE_REALTIME_SYMBOLS = ("BTCUSDT", "SOLUSDT", "XRPUSDT", "ETHUSDT")
+
+_MULTI_AGENT_SECRET_ENV: dict[AIProvider, str] = {
+    AIProvider.GEMINI: "GEMINI_API_KEY",
+    AIProvider.CLAUDE: "ANTHROPIC_API_KEY",
+    AIProvider.OPENAI_COMPATIBLE: "OPENAI_COMPATIBLE_API_KEY",
+    AIProvider.DEEPSEEK: "DEEPSEEK_API_KEY",
+    AIProvider.OPENROUTER: "OPENROUTER_API_KEY",
+}
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -41,6 +57,141 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mapping_int(
+    env: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = env.get(name)
+    value = default if raw is None or not raw.strip() else int(raw)
+    return max(minimum, min(maximum, value))
+
+
+def _mapping_float(
+    env: Mapping[str, str],
+    name: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    raw = env.get(name)
+    value = default if raw is None or not raw.strip() else float(raw)
+    return max(minimum, min(maximum, value))
+
+
+def _multi_agent_provider_config(
+    assignment: FrozenRoleAssignment,
+    env: Mapping[str, str],
+) -> AIProviderRuntimeConfig:
+    secret_name = _MULTI_AGENT_SECRET_ENV[assignment.provider]
+    api_key = (env.get(secret_name) or "").strip()
+    if not api_key:
+        raise ValueError(f"{secret_name} is required for {assignment.role.value}")
+
+    base_url = ""
+    if assignment.provider is AIProvider.OPENAI_COMPATIBLE:
+        base_url = (env.get("OPENAI_COMPATIBLE_BASE_URL") or "").strip()
+        if not base_url:
+            raise ValueError("OPENAI_COMPATIBLE_BASE_URL is required for OPENAI_COMPATIBLE")
+
+    return AIProviderRuntimeConfig(
+        provider=assignment.provider,
+        model=assignment.model,
+        api_key=api_key,
+        base_url=base_url,
+        timeout_seconds=_mapping_float(
+            env,
+            "AI_MULTI_AGENT_TIMEOUT_SECONDS",
+            20.0,
+            minimum=1.0,
+            maximum=120.0,
+        ),
+        max_retries=_mapping_int(
+            env,
+            "AI_MULTI_AGENT_MAX_RETRIES",
+            1,
+            minimum=0,
+            maximum=1,
+        ),
+    )
+
+
+async def _build_multi_agent_runner(
+    *,
+    stack: AsyncExitStack,
+    env: Mapping[str, str],
+    supabase_url: str,
+    service_role_key: str,
+    market_client,
+    news_repo,
+):
+    """Build the sidecar/primary multi-agent runtime without risking market ingestion."""
+    try:
+        config = load_multi_agent_config(env).to_frozen_snapshot()
+        if config.mode is RolloutMode.OFF:
+            return None
+        if not config.assignments:
+            raise ValueError("multi-agent rollout has no enabled role assignments")
+
+        clients = {}
+        for assignment in config.assignments:
+            runtime_config = _multi_agent_provider_config(assignment, env)
+            client = build_provider_client(runtime_config)
+            clients[assignment.role] = await stack.enter_async_context(client)
+
+        repository = await stack.enter_async_context(
+            SupabaseMultiAgentRepository(
+                supabase_url=supabase_url,
+                api_key=service_role_key,
+            )
+        )
+        invoker = RoleAwareProviderInvoker(clients)
+        orchestrator = MultiAgentOrchestrator(
+            repository=repository,
+            invoker=invoker,
+            max_concurrency=_mapping_int(
+                env,
+                "AI_MULTI_AGENT_CONCURRENCY",
+                3,
+                minimum=1,
+                maximum=6,
+            ),
+        )
+        performance_service = MultiAgentPerformanceService(repository)
+        snapshot_builder = partial(
+            build_ai_snapshot,
+            market_client=market_client,
+            news_repo=news_repo,
+        )
+        return MultiAgentScanRunner(
+            orchestrator=orchestrator,
+            config=config,
+            snapshot_builder=snapshot_builder,
+            performance_service=performance_service,
+            candidate_limit=_mapping_int(
+                env,
+                "AI_MULTI_AGENT_CANDIDATE_LIMIT",
+                3,
+                minimum=1,
+                maximum=50,
+            ),
+            min_opportunity_score=_mapping_float(
+                env,
+                "AI_MULTI_AGENT_MIN_OPPORTUNITY_SCORE",
+                65.0,
+                minimum=0.0,
+                maximum=100.0,
+            ),
+        )
+    except Exception as exc:
+        print(f"multi-agent disabled: invalid configuration type={type(exc).__name__}")
+        return None
 
 
 def _select_realtime_symbols(candidates, realtime_symbol_limit: int) -> list[str]:
@@ -81,6 +232,23 @@ async def _finish_ai_task(ai_task: asyncio.Task | None) -> None:
         )
 
 
+async def _finish_multi_agent_task(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    try:
+        summary = await task
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(f"multi-agent task failed type={type(exc).__name__}")
+        return
+    if summary is not None:
+        print(
+            f"multi_agent attempted={summary.attempted} approved={summary.approved} "
+            f"rejected={summary.rejected} failed={summary.failed} skipped={summary.skipped}"
+        )
+
+
 async def run_realtime_cycle(
     *,
     scanner,
@@ -93,6 +261,7 @@ async def run_realtime_cycle(
     realtime_seconds: float,
     flush_interval_seconds: float,
     ai_runner=None,
+    multi_agent_runner=None,
 ) -> MarketScanResult:
     result = await scanner.scan(
         timeframe=timeframe,
@@ -104,6 +273,9 @@ async def run_realtime_cycle(
     ai_task = None
     if ai_runner is not None:
         ai_task = asyncio.create_task(ai_runner.analyze_scan(result, persisted))
+    multi_agent_task = None
+    if multi_agent_runner is not None:
+        multi_agent_task = asyncio.create_task(multi_agent_runner.analyze_scan(result, persisted))
 
     try:
         symbols = _select_realtime_symbols(result.candidates, realtime_symbol_limit)
@@ -125,15 +297,19 @@ async def run_realtime_cycle(
                 await repo.upsert_live_states(states)
     except asyncio.CancelledError:
         await _cancel_ai_task(ai_task)
+        await _cancel_ai_task(multi_agent_task)
         raise
     except Exception:
         await _cancel_ai_task(ai_task)
+        await _cancel_ai_task(multi_agent_task)
         raise
 
     try:
         await _finish_ai_task(ai_task)
+        await _finish_multi_agent_task(multi_agent_task)
     except asyncio.CancelledError:
         await _cancel_ai_task(ai_task)
+        await _cancel_ai_task(multi_agent_task)
         raise
     return result
 
@@ -170,6 +346,10 @@ async def run_forever() -> None:
     retry_delay = _env_float("WORKER_RETRY_SECONDS", 10.0, minimum=1.0, maximum=300.0)
     news_enrichment_enabled = _env_flag("NEWS_ENRICHMENT_V1_ENABLED", False)
     ai_analysis_enabled = _env_flag("AI_ANALYSIS_V1_ENABLED", False)
+    multi_agent_mode = resolve_multi_agent_mode(
+        os.getenv("AI_MULTI_AGENT_ENABLED"),
+        os.getenv("AI_MULTI_AGENT_MODE"),
+    )
 
     async with AsyncExitStack() as stack:
         client = await stack.enter_async_context(BinanceUsdMClient())
@@ -181,7 +361,7 @@ async def run_forever() -> None:
         )
 
         news_repo = None
-        if news_enrichment_enabled or ai_analysis_enabled:
+        if news_enrichment_enabled or ai_analysis_enabled or multi_agent_mode is not RolloutMode.OFF:
             news_repo = await stack.enter_async_context(
                 SupabaseNewsRepository(
                     supabase_url=supabase_url,
@@ -258,6 +438,22 @@ async def run_forever() -> None:
                     print(f"ai analysis disabled: invalid configuration type={type(exc).__name__}")
                     ai_runner = None
 
+        multi_agent_runner = await _build_multi_agent_runner(
+            stack=stack,
+            env=os.environ,
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            market_client=client,
+            news_repo=news_repo,
+        )
+
+        # OFF keeps the legacy path. SHADOW runs both paths. PRIMARY suppresses
+        # new legacy analyses only when the multi-agent runtime is healthy;
+        # configuration failure therefore falls back to legacy behavior.
+        effective_ai_runner = ai_runner
+        if multi_agent_runner is not None and multi_agent_mode is RolloutMode.PRIMARY:
+            effective_ai_runner = None
+
         realtime = BinanceUsdMRealtimeClient()
         while True:
             try:
@@ -271,7 +467,8 @@ async def run_forever() -> None:
                     realtime_symbol_limit=realtime_symbol_limit,
                     realtime_seconds=realtime_seconds,
                     flush_interval_seconds=flush_interval,
-                    ai_runner=ai_runner,
+                    ai_runner=effective_ai_runner,
+                    multi_agent_runner=multi_agent_runner,
                 )
                 print(
                     f"scanner cycle complete timeframe={result.timeframe} "
@@ -291,7 +488,3 @@ def main() -> None:
         print(asyncio.run(scan_once()))
         return
     asyncio.run(run_forever())
-
-
-if __name__ == "__main__":
-    main()

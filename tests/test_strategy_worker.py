@@ -1,5 +1,6 @@
 import asyncio
 
+from btc_core.ai.multi_agent.models import RolloutMode
 from services.strategy_worker.app.main import StrategyWorker, load_worker_config
 
 
@@ -68,13 +69,17 @@ def test_disabled_worker_does_not_touch_repository():
 
 
 def test_worker_defaults_are_safe(monkeypatch):
-    for key in ("STRATEGY_WORKER_ENABLED", "OUTCOME_EVALUATION_ENABLED", "SIMULATION_ENGINE_ENABLED", "LIVE_ORDER_EXECUTION_ENABLED"):
+    for key in (
+        "STRATEGY_WORKER_ENABLED", "OUTCOME_EVALUATION_ENABLED", "SIMULATION_ENGINE_ENABLED",
+        "LIVE_ORDER_EXECUTION_ENABLED", "AI_MULTI_AGENT_ENABLED", "AI_MULTI_AGENT_MODE",
+    ):
         monkeypatch.delenv(key, raising=False)
     config = load_worker_config()
     assert config.enabled is False
     assert config.outcome_evaluation_enabled is False
     assert config.simulation_engine_enabled is False
     assert config.live_order_execution_enabled is False
+    assert config.multi_agent_mode is RolloutMode.OFF
     assert config.cycle_seconds == 60
 
 

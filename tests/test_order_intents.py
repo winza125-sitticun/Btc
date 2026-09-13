@@ -20,6 +20,8 @@ def setup(**overrides):
 def test_only_approved_setup_produces_fixed_dry_run_intent():
     intent = generate_order_intent(setup(), approved_context(), RiskPolicy())
     assert intent is not None
+    assert intent.analysis_id == 42
+    assert intent.multi_agent_run_id is None
     assert intent.symbol == "BTCUSDT"
     assert intent.side == "LONG"
     assert intent.quantity > 0
