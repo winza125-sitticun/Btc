@@ -80,11 +80,13 @@ async def test_gemini_uses_configured_model_and_structured_json_output():
             option for option in entry_schema["anyOf"] if option.get("type") == "number"
         )
         assert numeric_entry_schema["minimum"] == 0
-        assert "entry_min" not in schema["required"]
-        assert "entry_max" not in schema["required"]
-        assert "stop_loss" not in schema["required"]
-        assert "risk_reward" not in schema["required"]
-        assert "take_profits" not in schema["required"]
+        assert {
+            "entry_min",
+            "entry_max",
+            "stop_loss",
+            "risk_reward",
+            "take_profits",
+        }.issubset(schema["required"])
         assert "minItems" not in schema["properties"]["take_profits"]
         assert schema["properties"]["take_profits"]["maxItems"] == 5
 

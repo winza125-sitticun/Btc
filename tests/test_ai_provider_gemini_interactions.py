@@ -60,6 +60,14 @@ async def test_gemini_38_uses_stateless_interactions_structured_output_with_boun
         assert "provider" not in schema.get("required", [])
         assert "model" not in schema.get("required", [])
         assert "direction" in schema["properties"]
+        assert {
+            "entry_min",
+            "entry_max",
+            "stop_loss",
+            "take_profits",
+            "risk_reward",
+        }.issubset(schema["required"])
+        assert "For LONG or SHORT, provide strictly positive entry_min" in body["input"]
 
         return httpx.Response(
             200,
