@@ -54,6 +54,20 @@ class AIAnalysisPrecheck(_FrozenAIModel):
 
 
 def validate_price_geometry(decision: AIDecision) -> PriceGeometryResult:
+    if decision.direction is Direction.WAIT:
+        return PriceGeometryResult(valid=True)
+    if decision.direction is Direction.EXIT:
+        return PriceGeometryResult(valid=False, reasons=("exit_not_allowed",))
+
+    if (
+        decision.entry_min is None
+        or decision.entry_max is None
+        or decision.stop_loss is None
+        or decision.risk_reward is None
+        or not decision.take_profits
+    ):
+        return PriceGeometryResult(valid=False, reasons=("invalid_price_structure",))
+
     if decision.direction is Direction.LONG:
         valid = (
             decision.stop_loss < decision.entry_min <= decision.entry_max
@@ -64,10 +78,8 @@ def validate_price_geometry(decision: AIDecision) -> PriceGeometryResult:
             all(tp < decision.entry_min for tp in decision.take_profits)
             and decision.entry_min <= decision.entry_max < decision.stop_loss
         )
-    elif decision.direction is Direction.WAIT:
-        return PriceGeometryResult(valid=True)
     else:
-        return PriceGeometryResult(valid=False, reasons=("exit_not_allowed",))
+        valid = False
 
     return PriceGeometryResult(
         valid=valid,
@@ -95,7 +107,9 @@ def precheck_ai_decision(
         reasons.append("confidence_below_minimum")
     if opportunity_score < policy.min_opportunity_score:
         reasons.append("opportunity_score_below_minimum")
-    if decision.risk_reward < policy.min_risk_reward:
+    if decision.direction in {Direction.LONG, Direction.SHORT} and (
+        decision.risk_reward is None or decision.risk_reward < policy.min_risk_reward
+    ):
         reasons.append("risk_reward_below_minimum")
 
     if reasons:
