@@ -114,3 +114,28 @@ async def test_alert_repository_filter_removes_nested_auth_fields():
     body = requests[-1].content.decode()
     assert "auth_header" not in body and "oauth_token" not in body and "password" not in body
     assert '"safe":{"value":3}' in body
+
+
+@pytest.mark.asyncio
+async def test_default_readiness_evidence_fails_closed_and_persists_snapshot():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "POST" and request.url.path.endswith("market_readiness_checks"):
+            return httpx.Response(201, json=[])
+        return httpx.Response(200, json=[])
+
+    async with SupabaseStrategyRepository(
+        supabase_url="https://x.supabase.co",
+        api_key="service",
+        transport=httpx.MockTransport(handler),
+    ) as repo:
+        snapshot = await repo.evaluate_readiness()
+
+    assert snapshot.overall_status == "NOT_READY"
+    persisted = [r for r in requests if r.method == "POST" and r.url.path.endswith("market_readiness_checks")]
+    assert len(persisted) == 1
+    body = persisted[0].content.decode()
+    assert '"overall_status":"NOT_READY"' in body
+    assert "service" not in body
