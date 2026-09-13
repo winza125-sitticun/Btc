@@ -17,6 +17,21 @@ _GEMINI_JSON_SCHEMA_KEYS = {
     "properties", "additionalProperties", "required",
 }
 
+_ACTIONABLE_GEOMETRY_FIELDS = (
+    "entry_min",
+    "entry_max",
+    "stop_loss",
+    "take_profits",
+    "risk_reward",
+)
+
+_TRADE_GEOMETRY_INSTRUCTION = (
+    "For LONG or SHORT, provide strictly positive entry_min, entry_max, stop_loss, "
+    "at least one strictly positive take_profits item, and strictly positive risk_reward; "
+    "entry_min must be less than or equal to entry_max. "
+    "For WAIT, use null for scalar geometry fields and [] for take_profits. "
+)
+
 
 def _normalize_gemini_json_schema(value: Any) -> Any:
     if isinstance(value, list):
@@ -95,6 +110,7 @@ class GeminiProviderClient:
                 + "Analyze this bounded crypto futures snapshot. "
                 + output_instruction
                 + "Direction must be LONG, SHORT, or WAIT; never claim an order was executed.\n"
+                + _TRADE_GEOMETRY_INSTRUCTION
                 + snapshot.model_dump_json()
             )}]}],
         }
@@ -102,12 +118,19 @@ class GeminiProviderClient:
             return payload
         response_text: dict[str, Any] = {"mimeType": "application/json"}
         if include_schema:
-            response_text["schema"] = _normalize_gemini_json_schema(AIDecision.model_json_schema())
+            response_text["schema"] = self._response_schema()
         payload["generationConfig"] = {"responseFormat": {"text": response_text}}
         return payload
 
-    def _interaction_schema(self) -> dict[str, Any]:
+    def _response_schema(self) -> dict[str, Any]:
         schema = _normalize_gemini_json_schema(AIDecision.model_json_schema())
+        required = schema.get("required")
+        if isinstance(required, list):
+            schema["required"] = list(dict.fromkeys([*required, *_ACTIONABLE_GEOMETRY_FIELDS]))
+        return schema
+
+    def _interaction_schema(self) -> dict[str, Any]:
+        schema = self._response_schema()
         properties = schema.get("properties")
         if isinstance(properties, dict):
             properties.pop("provider", None); properties.pop("model", None)
@@ -126,6 +149,7 @@ class GeminiProviderClient:
                 + "Analyze this bounded crypto futures snapshot. "
                 "Return exactly one JSON object matching the response schema. "
                 "Direction must be LONG, SHORT, or WAIT; never claim an order was executed.\n"
+                + _TRADE_GEOMETRY_INSTRUCTION
                 + snapshot.model_dump_json()
             ),
             "generation_config": {"thinking_level": thinking_level, "max_output_tokens": 512},

@@ -1,6 +1,7 @@
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 
 class AIProvider(StrEnum):
@@ -61,14 +62,26 @@ class AIDecision(BaseModel):
             or self.entry_max is None
             or self.stop_loss is None
             or self.risk_reward is None
-            or self.entry_min <= 0
+            or not self.take_profits
+        ):
+            raise PydanticCustomError(
+                "trade_geometry_missing",
+                "LONG/SHORT decisions require complete trade geometry",
+            )
+        if (
+            self.entry_min <= 0
             or self.entry_max <= 0
             or self.stop_loss <= 0
             or self.risk_reward <= 0
-            or not self.take_profits
             or any(value <= 0 for value in self.take_profits)
         ):
-            raise ValueError("LONG/SHORT decisions require complete positive trade geometry")
+            raise PydanticCustomError(
+                "trade_geometry_non_positive",
+                "LONG/SHORT decisions require positive trade geometry",
+            )
         if self.entry_min > self.entry_max:
-            raise ValueError("entry_min must be less than or equal to entry_max")
+            raise PydanticCustomError(
+                "trade_geometry_entry_range",
+                "entry_min must be less than or equal to entry_max",
+            )
         return self

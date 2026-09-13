@@ -270,7 +270,7 @@ async def test_orchestrator_persists_bounded_schema_diagnostic_without_raw_paylo
 
     failed = next(item for item in repository.attempts if item.role is AgentRole.TECHNICAL)
     assert failed.status.value == "INVALID_RESPONSE"
-    assert failed.error_code == "INVALID_SCHEMA_GEOMETRY"
+    assert failed.error_code == "INVALID_SCHEMA_GEOMETRY_MISSING"
     assert failed.error_message == "Gemini decision failed schema validation"
     assert "RAW_SENTINEL_123" not in failed.error_message
     assert result.status is RunStatus.PARTIAL

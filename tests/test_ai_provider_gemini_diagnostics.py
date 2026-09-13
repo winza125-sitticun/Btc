@@ -21,15 +21,53 @@ def _config() -> AIProviderRuntimeConfig:
 
 
 @pytest.mark.asyncio
-async def test_invalid_actionable_geometry_has_safe_diagnostic_code():
+@pytest.mark.parametrize(
+    ("invalid_decision", "expected_code"),
+    [
+        (
+            {
+                "symbol": "BTCUSDT",
+                "timeframe": "15m",
+                "direction": "LONG",
+                "confidence": 80,
+            },
+            "INVALID_SCHEMA_GEOMETRY_MISSING",
+        ),
+        (
+            {
+                "symbol": "BTCUSDT",
+                "timeframe": "15m",
+                "direction": "LONG",
+                "confidence": 80,
+                "entry_min": 0,
+                "entry_max": 100,
+                "stop_loss": 95,
+                "take_profits": [110],
+                "risk_reward": 2,
+            },
+            "INVALID_SCHEMA_GEOMETRY_NON_POSITIVE",
+        ),
+        (
+            {
+                "symbol": "BTCUSDT",
+                "timeframe": "15m",
+                "direction": "LONG",
+                "confidence": 80,
+                "entry_min": 101,
+                "entry_max": 100,
+                "stop_loss": 95,
+                "take_profits": [110],
+                "risk_reward": 2,
+            },
+            "INVALID_SCHEMA_GEOMETRY_ENTRY_RANGE",
+        ),
+    ],
+)
+async def test_invalid_actionable_geometry_has_safe_specific_diagnostic_code(
+    invalid_decision: dict[str, object], expected_code: str
+):
     marker = "RAW_SENTINEL_123"
-    invalid_decision = {
-        "symbol": "BTCUSDT",
-        "timeframe": "15m",
-        "direction": "LONG",
-        "confidence": 80,
-        "reason_summary": marker,
-    }
+    invalid_decision = {**invalid_decision, "reason_summary": marker}
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -56,7 +94,7 @@ async def test_invalid_actionable_geometry_has_safe_diagnostic_code():
             await client.analyze(make_snapshot())
 
     assert captured.value.code == "INVALID_SCHEMA"
-    assert safe_provider_error_code(captured.value) == "INVALID_SCHEMA_GEOMETRY"
+    assert safe_provider_error_code(captured.value) == expected_code
     assert marker not in str(captured.value)
     assert marker not in safe_provider_error_code(captured.value)
     assert "BTCUSDT" not in str(captured.value)

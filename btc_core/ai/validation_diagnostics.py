@@ -15,6 +15,12 @@ _GEOMETRY_FIELDS = frozenset(
     }
 )
 
+_GEOMETRY_ERROR_CODES = {
+    "trade_geometry_missing": "INVALID_SCHEMA_GEOMETRY_MISSING",
+    "trade_geometry_non_positive": "INVALID_SCHEMA_GEOMETRY_NON_POSITIVE",
+    "trade_geometry_entry_range": "INVALID_SCHEMA_GEOMETRY_ENTRY_RANGE",
+}
+
 
 def safe_provider_error_code(exc: AIProviderError) -> str:
     """Return a bounded diagnostic code without inspecting or persisting raw AI output."""
@@ -32,6 +38,9 @@ def safe_provider_error_code(exc: AIProviderError) -> str:
         include_context=False,
         include_input=False,
     ):
+        specific_code = _GEOMETRY_ERROR_CODES.get(str(error.get("type", "")))
+        if specific_code:
+            return specific_code
         location = error.get("loc", ())
         if not location:
             has_model_level_error = True
