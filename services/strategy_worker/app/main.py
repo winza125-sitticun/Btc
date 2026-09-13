@@ -7,7 +7,8 @@ from dataclasses import dataclass
 
 from btc_core.ai.multi_agent.config import resolve_multi_agent_mode
 from btc_core.ai.multi_agent.models import RolloutMode
-from btc_core.strategy.repository import PublicBinanceKlinesFetcher, SupabaseStrategyRepository
+from btc_core.strategy.readiness_evidence import ReadinessEvidenceRepository
+from btc_core.strategy.repository import PublicBinanceKlinesFetcher
 
 
 def _flag(name: str, default: bool = False) -> bool:
@@ -149,7 +150,7 @@ async def run_forever() -> None:
     url, key = os.getenv("SUPABASE_URL", "").strip(), os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if not url or not key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
-    async with SupabaseStrategyRepository(supabase_url=url, api_key=key) as repository:
+    async with ReadinessEvidenceRepository(supabase_url=url, api_key=key) as repository:
         fetcher = PublicBinanceKlinesFetcher()
         worker = StrategyWorker(repository=repository, market_client=fetcher,
                                  enabled=True,
