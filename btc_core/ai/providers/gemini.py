@@ -116,13 +116,26 @@ class GeminiProviderClient:
             schema["required"] = [item for item in required if item not in {"provider", "model"}]
         return schema
 
-    def _interaction_payload(self, snapshot: AIAnalysisSnapshot, *, instruction: str | None = None) -> dict[str, Any]:
+    def _interaction_payload(
+        self,
+        snapshot: AIAnalysisSnapshot,
+        *,
+        instruction: str | None = None,
+        schema_repair: bool = False,
+    ) -> dict[str, Any]:
         thinking_level = "minimal" if self.config.model == "gemini-3.5-flash-lite" else "low"
+        repair_instruction = (
+            "Schema repair retry: the previous output failed strict validation. "
+            "Return every required field with valid values and no extra fields. "
+            if schema_repair
+            else ""
+        )
         return {
             "model": self.config.model,
             "store": False,
             "input": (
                 _role_prefix(instruction)
+                + repair_instruction
                 + "Analyze this bounded crypto futures snapshot. "
                 "Return exactly one JSON object matching the response schema. "
                 "Direction must be LONG, SHORT, or WAIT; never claim an order was executed.\n"
@@ -171,8 +184,30 @@ class GeminiProviderClient:
 
     async def analyze(self, snapshot: AIAnalysisSnapshot, *, instruction: str | None = None) -> AIDecision:
         if self.config.model.startswith("gemini-3"):
-            response = await request_with_retry(self._client, "POST", "interactions", max_retries=self.config.max_retries, json=self._interaction_payload(snapshot, instruction=instruction))
-            return self._parse_interaction_response(response)
+            response = await request_with_retry(
+                self._client,
+                "POST",
+                "interactions",
+                max_retries=self.config.max_retries,
+                json=self._interaction_payload(snapshot, instruction=instruction),
+            )
+            try:
+                return self._parse_interaction_response(response)
+            except AIProviderError as exc:
+                if exc.code != "INVALID_SCHEMA" or self.config.max_retries < 1:
+                    raise
+            repair_response = await request_with_retry(
+                self._client,
+                "POST",
+                "interactions",
+                max_retries=0,
+                json=self._interaction_payload(
+                    snapshot,
+                    instruction=instruction,
+                    schema_repair=True,
+                ),
+            )
+            return self._parse_interaction_response(repair_response)
         path = f"models/{self.config.model}:generateContent"
         try:
             response = await request_with_retry(self._client, "POST", path, max_retries=self.config.max_retries, json=self._request_payload(snapshot, instruction=instruction))
