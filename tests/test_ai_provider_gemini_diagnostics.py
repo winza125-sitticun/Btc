@@ -6,6 +6,7 @@ import pytest
 from btc_core.ai.models import AIProvider
 from btc_core.ai.providers.base import AIProviderError, AIProviderRuntimeConfig
 from btc_core.ai.providers.gemini import GeminiProviderClient
+from btc_core.ai.validation_diagnostics import safe_provider_error_code
 from tests.test_ai_provider_openai_compatible import make_snapshot
 
 
@@ -54,7 +55,8 @@ async def test_invalid_actionable_geometry_has_safe_diagnostic_code():
         with pytest.raises(AIProviderError) as captured:
             await client.analyze(make_snapshot())
 
-    assert captured.value.code == "INVALID_SCHEMA_GEOMETRY"
-    assert "geometry" in str(captured.value).lower()
+    assert captured.value.code == "INVALID_SCHEMA"
+    assert safe_provider_error_code(captured.value) == "INVALID_SCHEMA_GEOMETRY"
     assert marker not in str(captured.value)
+    assert marker not in safe_provider_error_code(captured.value)
     assert "BTCUSDT" not in str(captured.value)
