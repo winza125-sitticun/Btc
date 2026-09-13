@@ -488,3 +488,7 @@ def main() -> None:
         print(asyncio.run(scan_once()))
         return
     asyncio.run(run_forever())
+
+
+if __name__ == "__main__":
+    main()
