@@ -39,6 +39,7 @@ from btc_core.ai.multi_agent.risk_gate import (
     evaluate_multi_agent_risk,
 )
 from btc_core.ai.providers.base import AIProviderError
+from btc_core.ai.validation_diagnostics import safe_provider_error_code
 from btc_core.risk.engine import RiskPolicy
 from btc_core.strategy.risk import FullRiskContext
 
@@ -139,9 +140,9 @@ class MultiAgentOrchestrator:
             attempt_status = AttemptStatus.SUCCESS
         except AIProviderError as exc:
             decision = None
-            error_code = exc.code
+            error_code = safe_provider_error_code(exc)
             error_message = str(exc)[:500]
-            if exc.code.startswith("INVALID_") or exc.code == "PROMPT_INTEGRITY":
+            if error_code.startswith("INVALID_") or error_code == "PROMPT_INTEGRITY":
                 persistence_status = AttemptPersistenceStatus.INVALID_RESPONSE
                 attempt_status = AttemptStatus.INVALID_RESPONSE
         except Exception:
