@@ -117,7 +117,9 @@ async def test_alert_repository_filter_removes_nested_auth_fields():
 
 
 @pytest.mark.asyncio
-async def test_default_readiness_evidence_fails_closed_and_persists_snapshot():
+async def test_worker_readiness_repository_fails_closed_and_persists_snapshot():
+    from btc_core.strategy.readiness_evidence import ReadinessEvidenceRepository
+
     requests = []
 
     def handler(request):
@@ -126,7 +128,7 @@ async def test_default_readiness_evidence_fails_closed_and_persists_snapshot():
             return httpx.Response(201, json=[])
         return httpx.Response(200, json=[])
 
-    async with SupabaseStrategyRepository(
+    async with ReadinessEvidenceRepository(
         supabase_url="https://x.supabase.co",
         api_key="service",
         transport=httpx.MockTransport(handler),
