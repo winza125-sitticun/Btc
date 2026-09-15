@@ -1,0 +1,117 @@
+        result["status"] = _target_status(touched) or "EXPIRED"
+        result["closed_at_ms"] = horizon_end
+    return result
+
+
+_SCORE_BUCKETS = (
+    (0, 69, "0-69"),
+    (70, 74, "70-74"),
+    (75, 79, "75-79"),
+    (80, 84, "80-84"),
+    (85, 89, "85-89"),
+    (90, 100, "90-100"),
+)
+_ANALYZABLE_STATUSES = {"TP1", "TP2", "TP3", "SL", "EXPIRED"}
+_SUCCESS_STATUSES = {"TP1", "TP2", "TP3"}
+
+
+def _safe_median(values: list[float]) -> Optional[float]:
+    clean = [float(v) for v in values if v is not None]
+    return float(statistics.median(clean)) if clean else None
+
+
+def _stats_for_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
+    analyzable = [r for r in rows if str(r.get("outcome_status", "")).upper() in _ANALYZABLE_STATUSES]
+    total = len(analyzable)
+    wins = sum(1 for r in analyzable if str(r.get("outcome_status", "")).upper() in _SUCCESS_STATUSES)
+    losses = sum(1 for r in analyzable if str(r.get("outcome_status", "")).upper() == "SL")
+    return {
+        "sample_count": total,
+        "tp1_before_sl_rate_pct": (wins / total * 100.0) if total else None,
+        "sl_before_tp1_rate_pct": (losses / total * 100.0) if total else None,
+        "median_mfe_r": _safe_median([r.get("mfe_r") for r in analyzable]),
+        "median_mae_r": _safe_median([r.get("mae_r") for r in analyzable]),
+        "expired_count": sum(1 for r in analyzable if str(r.get("outcome_status", "")).upper() == "EXPIRED"),
+    }
+
+
+def _bucket_for_score(score: int) -> Optional[tuple[int, int, str]]:
+    for low, high, label in _SCORE_BUCKETS:
+        if low <= score <= high:
+            return low, high, label
+    return None
+
+
+def _breakdown(rows: list[Dict[str, Any]], field: str) -> Dict[str, Dict[str, Any]]:
+    groups: Dict[str, list[Dict[str, Any]]] = {}
+    for row in rows:
+        value = row.get(field)
+        key = "NONE" if value is None or str(value) == "" else str(value)
+        groups.setdefault(key, []).append(row)
+    return {key: _stats_for_rows(group_rows) for key, group_rows in sorted(groups.items())}
+
+
+def build_calibration_report(
+    rows: list[Dict[str, Any]],
+    min_total_samples: int = 100,
+    min_bucket_samples: int = 30,
+) -> Dict[str, Any]:
+    min_total_samples = max(1, int(min_total_samples))
+    min_bucket_samples = max(1, int(min_bucket_samples))
+    rows = [dict(row) for row in (rows or [])]
+
+    bucket_reports = []
+    sufficient_bucket_count = 0
+    for low, high, label in _SCORE_BUCKETS:
+        bucket_rows = []
+        for row in rows:
+            try:
+                score = int(row.get("score_total"))
+            except (TypeError, ValueError):
+                continue
+            if low <= score <= high:
+                bucket_rows.append(row)
+        stats = _stats_for_rows(bucket_rows)
+        stats.update({
+            "label": label,
+            "min_score": low,
+            "max_score": high,
+            "ambiguous_count": sum(1 for r in bucket_rows if str(r.get("outcome_status", "")).upper() == "AMBIGUOUS"),
+            "no_data_count": sum(1 for r in bucket_rows if str(r.get("outcome_status", "")).upper() == "NO_DATA"),
+        })
+        stats["sufficient_samples"] = stats["sample_count"] >= min_bucket_samples
+        if stats["sufficient_samples"]:
+            sufficient_bucket_count += 1
+        bucket_reports.append(stats)
+
+    overall = _stats_for_rows(rows)
+    analyzable_samples = overall["sample_count"]
+    calibration_ready = analyzable_samples >= min_total_samples and sufficient_bucket_count >= 2
+    recommendation = {
+        "status": "EVIDENCE_READY" if calibration_ready else "INSUFFICIENT_DATA",
+        "message": (
+            "Evidence is sufficient for human review; runtime weights and thresholds remain unchanged."
+            if calibration_ready
+            else "Collect more non-ambiguous shadow outcomes before considering score calibration."
+        ),
+        "automatic_changes_allowed": False,
+    }
+
+    return {
+        "analyzable_samples": analyzable_samples,
+        "ambiguous_samples": sum(1 for r in rows if str(r.get("outcome_status", "")).upper() == "AMBIGUOUS"),
+        "no_data_samples": sum(1 for r in rows if str(r.get("outcome_status", "")).upper() == "NO_DATA"),
+        "minimum_total_samples": min_total_samples,
+        "minimum_bucket_samples": min_bucket_samples,
+        "calibration_ready": calibration_ready,
+        "overall": overall,
+        "score_buckets": bucket_reports,
+        "breakdowns": {
+            "side": _breakdown(rows, "side"),
+            "btc_bias": _breakdown(rows, "btc_bias"),
+            "astra_verdict": _breakdown(rows, "astra_verdict"),
+            "data_provider": _breakdown(rows, "data_provider"),
+            "symbol": _breakdown(rows, "symbol"),
+        },
+        "recommendation": recommendation,
+    }
