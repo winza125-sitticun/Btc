@@ -1,0 +1,219 @@
+                """,
+                (int(now_ms),),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["score_valid"] = bool(item["score_valid"])
+            item["score_components"] = json.loads(item.pop("score_components_json") or "{}")
+            result.append(item)
+        return result
+
+
+
+    def update_outcome(self, snapshot_id: str, outcome: Dict[str, Any]) -> None:
+        allowed = {"OPEN", "TP1", "TP2", "TP3", "SL", "EXPIRED", "AMBIGUOUS", "NO_DATA"}
+        status = str(outcome.get("status", "OPEN")).upper()
+        if status not in allowed:
+            raise ValueError("invalid outcome status")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE setup_outcomes
+                SET status = ?, evaluated_through_ms = ?, sl_touched_at_ms = ?,
+                    tp1_touched_at_ms = ?, tp2_touched_at_ms = ?, tp3_touched_at_ms = ?,
+                    mfe_r = ?, mae_r = ?, closed_at_ms = ?
+                WHERE snapshot_id = ?
+                """,
+                (
+                    status,
+                    outcome.get("evaluated_through_ms"),
+                    outcome.get("sl_touched_at_ms"),
+                    outcome.get("tp1_touched_at_ms"),
+                    outcome.get("tp2_touched_at_ms"),
+                    outcome.get("tp3_touched_at_ms"),
+                    outcome.get("mfe_r"),
+                    outcome.get("mae_r"),
+                    outcome.get("closed_at_ms"),
+                    snapshot_id,
+                ),
+            )
+
+    def calibration_rows(self) -> list[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.score_total, s.side, s.btc_bias, s.astra_verdict,
+                       s.data_provider, s.symbol, o.status AS outcome_status,
+                       o.mfe_r, o.mae_r
+                FROM setup_snapshots s
+                JOIN setup_outcomes o ON o.snapshot_id = s.id
+                WHERE o.status <> 'OPEN'
+                ORDER BY s.created_at_ms ASC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_calibration_report(self, report: Dict[str, Any], created_at_ms: int) -> int:
+        payload = json.dumps(report, ensure_ascii=False, sort_keys=True)
+        sample_count = int(report.get("analyzable_samples", 0))
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO calibration_runs(created_at_ms, sample_count, report_json) VALUES (?, ?, ?)",
+                (int(created_at_ms), sample_count, payload),
+            )
+            return int(cursor.lastrowid)
+
+    def get_calibration_run(self, run_id: int) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, created_at_ms, sample_count, report_json FROM calibration_runs WHERE id = ?",
+                (int(run_id),),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": int(row["id"]),
+            "created_at_ms": int(row["created_at_ms"]),
+            "sample_count": int(row["sample_count"]),
+            "report": json.loads(row["report_json"]),
+        }
+
+def _target_status(touched: Dict[str, Optional[int]]) -> Optional[str]:
+    for name in ("tp3", "tp2", "tp1"):
+        if touched.get(name) is not None:
+            return name.upper()
+    return None
+
+
+def evaluate_snapshot(
+    snapshot: Dict[str, Any],
+    candles: list[Dict[str, Any]],
+    horizon_ms: int,
+    now_ms: int,
+) -> Dict[str, Any]:
+    """Evaluate one shadow setup using only fully post-snapshot closed candles."""
+    try:
+        side = str(snapshot["side"]).upper()
+        created_at_ms = int(snapshot["created_at_ms"])
+        entry = float(snapshot["entry"])
+        sl = float(snapshot["sl"])
+        risk = float(snapshot.get("risk_distance") or abs(entry - sl))
+        horizon_ms = int(horizon_ms)
+        now_ms = int(now_ms)
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("invalid snapshot")
+    if side not in {"LONG", "SHORT"} or risk <= 0 or horizon_ms <= 0:
+        raise ValueError("invalid snapshot/horizon")
+
+    targets: Dict[str, Optional[float]] = {}
+    for name in ("tp1", "tp2", "tp3"):
+        value = snapshot.get(name)
+        targets[name] = None if value is None else float(value)
+
+    horizon_end = created_at_ms + horizon_ms
+    cutoff = min(now_ms, horizon_end)
+    eligible = []
+    for candle in candles or []:
+        try:
+            open_time = int(candle["open_time"])
+            close_time = int(candle["close_time"])
+            high = float(candle["high"])
+            low = float(candle["low"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if high < low:
+            continue
+        if open_time < created_at_ms:
+            continue
+        if close_time > cutoff:
+            continue
+        eligible.append({"open_time": open_time, "close_time": close_time, "high": high, "low": low})
+    eligible.sort(key=lambda c: (c["open_time"], c["close_time"]))
+
+    result = {
+        "status": "OPEN",
+        "evaluated_through_ms": eligible[-1]["close_time"] if eligible else None,
+        "sl_touched_at_ms": None,
+        "tp1_touched_at_ms": None,
+        "tp2_touched_at_ms": None,
+        "tp3_touched_at_ms": None,
+        "mfe_r": 0.0 if eligible else None,
+        "mae_r": 0.0 if eligible else None,
+        "closed_at_ms": None,
+    }
+
+    if not eligible:
+        if now_ms >= horizon_end:
+            result["status"] = "NO_DATA"
+            result["closed_at_ms"] = horizon_end
+        return result
+
+    touched: Dict[str, Optional[int]] = {"tp1": None, "tp2": None, "tp3": None}
+    mfe_r = 0.0
+    mae_r = 0.0
+
+    for candle in eligible:
+        high = candle["high"]
+        low = candle["low"]
+        close_time = candle["close_time"]
+
+        if side == "LONG":
+            mfe_r = max(mfe_r, (high - entry) / risk)
+            mae_r = min(mae_r, (low - entry) / risk)
+            sl_hit = low <= sl
+            new_targets = [
+                name for name, target in targets.items()
+                if target is not None and touched[name] is None and high >= target
+            ]
+        else:
+            mfe_r = max(mfe_r, (entry - low) / risk)
+            mae_r = min(mae_r, (entry - high) / risk)
+            sl_hit = high >= sl
+            new_targets = [
+                name for name, target in targets.items()
+                if target is not None and touched[name] is None and low <= target
+            ]
+
+        if sl_hit and new_targets:
+            result["sl_touched_at_ms"] = close_time
+            for name in new_targets:
+                touched[name] = close_time
+                result[f"{name}_touched_at_ms"] = close_time
+            result.update(
+                status="AMBIGUOUS",
+                mfe_r=mfe_r,
+                mae_r=mae_r,
+                closed_at_ms=close_time,
+                evaluated_through_ms=close_time,
+            )
+            return result
+
+        for name in new_targets:
+            touched[name] = close_time
+            result[f"{name}_touched_at_ms"] = close_time
+
+        if sl_hit:
+            result["sl_touched_at_ms"] = close_time
+            result.update(
+                status=_target_status(touched) or "SL",
+                mfe_r=mfe_r,
+                mae_r=mae_r,
+                closed_at_ms=close_time,
+                evaluated_through_ms=close_time,
+            )
+            return result
+
+        if touched.get("tp3") is not None:
+            result.update(
+                status="TP3",
+                mfe_r=mfe_r,
+                mae_r=mae_r,
+                closed_at_ms=close_time,
+                evaluated_through_ms=close_time,
+            )
+            return result
+
+    result["mfe_r"] = mfe_r
+    result["mae_r"] = mae_r
+    if now_ms >= horizon_end:
