@@ -1,0 +1,220 @@
+
+
+def determine_btc_bias(
+    r4: Optional[str],
+    close4: Optional[float],
+    ema200_4: Optional[float],
+    r1: Optional[str],
+    close1: Optional[float],
+    ema200_1: Optional[float],
+) -> str:
+    """4H defines the regime; 1H must confirm it using its own EMA200."""
+    critical = (close4, ema200_4, close1, ema200_1)
+    if any(v is None for v in critical):
+        return "NEUTRAL"
+
+    if r4 in BUY_RECS and r1 in BUY_RECS and close4 > ema200_4 and close1 > ema200_1:
+        return "BULLISH"
+    if r4 in SELL_RECS and r1 in SELL_RECS and close4 < ema200_4 and close1 < ema200_1:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def setup_passes_filters(
+    *,
+    side: str,
+    symbol: str,
+    r4: Optional[str],
+    r1: Optional[str],
+    r15: Optional[str],
+    btc_bias: str,
+    price: Optional[float],
+    ema200: Optional[float],
+    adx: Optional[float],
+    di_plus: Optional[float],
+    di_minus: Optional[float],
+    funding: Optional[float],
+    adx_min: float,
+    max_long_funding: float,
+    min_short_funding: float,
+) -> bool:
+    """Deterministic gate. Critical missing data rejects the setup."""
+    if any(v is None for v in (price, ema200, adx, di_plus, di_minus, funding)):
+        return False
+
+    side = side.upper()
+    is_btc = symbol == "BTCUSDT"
+
+    if side == "LONG":
+        if not (r4 in BUY_RECS and r1 in BUY_RECS and r15 in BUY_RECS):
+            return False
+        if not is_btc and btc_bias == "BEARISH":
+            return False
+        if adx < adx_min or di_plus <= di_minus:
+            return False
+        if price <= ema200:
+            return False
+        if funding > max_long_funding:
+            return False
+        return True
+
+    if side == "SHORT":
+        if not (r4 in SELL_RECS and r1 in SELL_RECS and r15 in SELL_RECS):
+            return False
+        if not is_btc and btc_bias == "BULLISH":
+            return False
+        if adx < adx_min or di_minus <= di_plus:
+            return False
+        if price >= ema200:
+            return False
+        if funding < min_short_funding:
+            return False
+        return True
+
+    return False
+
+
+def send_telegram_alert(message: str) -> bool:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("  [!] Telegram credentials missing; alert not sent.")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    try:
+        resp = requests.post(url, json=payload, timeout=HTTP_TIMEOUT_SECONDS)
+        resp.raise_for_status()
+        return True
+    except requests.RequestException as exc:
+        print(f"  [!] Telegram error: {exc}")
+        return False
+
+
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    cleaned = (text or "").replace("```json", "").replace("```", "").strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("AI response does not contain a JSON object")
+    parsed = json.loads(cleaned[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("AI response JSON is not an object")
+    return parsed
+
+
+def analyze_with_ai(
+    symbol: str,
+    side: str,
+    price: float,
+    r4: str,
+    r1: str,
+    r15: str,
+    rsi: float,
+    adx: float,
+    funding: float,
+    btc_trend: str,
+    tags: list[str],
+    plan: Optional[Dict[str, Any]] = None,
+    setup_score: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Devil's Advocate only. AI outage or malformed output rejects the setup."""
+    if not GEMINI_API_KEY:
+        return {
+            "confidence": 0,
+            "verdict": "REJECT",
+            "reason": "AI validation unavailable",
+            "risk": "ไม่พบ GEMINI_API_KEY จึงไม่อนุมัติสัญญาณ",
+        }
+
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        plan = plan or {}
+        structure_text = (
+            f"SL={plan.get('sl')} | TP1={plan.get('tp1')} (RR={plan.get('rr_tp1')}) | "
+            f"TP2={plan.get('tp2')} (RR={plan.get('rr_tp2')}) | "
+            f"TP3={plan.get('tp3')} (RR={plan.get('rr_tp3')}) | ATR={plan.get('atr')}"
+        )
+        setup_score = setup_score or {}
+        score_text = f"{setup_score.get('score', 'N/A')}/100 | components={setup_score.get('components', {})}"
+        prompt = f"""
+คุณเป็น Risk Manager ของกองทุนเทรด Crypto Futures และทำหน้าที่ Devil's Advocate เท่านั้น
+ห้ามสร้างสัญญาณใหม่ หน้าที่คือจับความเสี่ยงของ setup ที่ผ่าน deterministic filters มาแล้ว
+
+- คู่เหรียญ: {symbol} (ทิศทาง: {side})
+- ราคา: {price}
+- BTC Bias: {btc_trend}
+- แนวโน้ม: 4H={r4} / 1H={r1} / 15m={r15}
+- RSI 1H: {rsi:.1f}
+- ADX 1H: {adx:.1f}
+- Funding Rate: {funding:+.4f}%
+- จุดสังเกต: {', '.join(tags)}
+- Structure Plan: {structure_text}
+- Deterministic Setup Score: {score_text}
+
+คำตัดสิน:
+- APPROVED = setup ยังแข็งแรงและไม่มีความเสี่ยงใหม่ที่ควรหยุด
+- WAIT = setup ผ่านคะแนนแล้ว แต่ควรรอ confirmation เพิ่มก่อนเข้า
+- REJECT = พบความเสี่ยงที่ทำให้ setup ไม่ควรถูกแจ้งเป็นสัญญาณเข้า
+ห้ามเปลี่ยน LONG เป็น SHORT หรือ SHORT เป็น LONG และห้ามสร้างสัญญาณใหม่
+
+ตอบ JSON เท่านั้น:
+{{
+  "confidence": <จำนวนเต็ม 0-100>,
+  "verdict": "APPROVED" หรือ "WAIT" หรือ "REJECT",
+  "reason": "เหตุผลภาษาไทยสั้นๆ 1 ประโยค",
+  "risk": "ความเสี่ยงสำคัญที่สุดภาษาไทย 1 ประโยค"
+}}
+"""
+        response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        result = _extract_json_object(getattr(response, "text", ""))
+        return normalize_ai_result(result)
+    except Exception as exc:
+        print(f"  [!] AI error: {exc}")
+        return {
+            "confidence": 0,
+            "verdict": "REJECT",
+            "reason": "AI validation unavailable",
+            "risk": "AI error หรือผลลัพธ์ไม่ถูกต้อง จึง fail-closed",
+        }
+
+
+def get_target_futures_symbols(limit: int = 40) -> list[str]:
+    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    try:
+        resp = requests.get(url, timeout=HTTP_TIMEOUT_SECONDS)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            blacklist = ("USDC", "FDUSD", "BUSD", "TUSD", "EUR", "DAI")
+            volume_by_symbol = {
+                item.get("symbol"): float(item.get("quoteVolume", 0) or 0)
+                for item in data
+                if isinstance(item, dict) and item.get("symbol")
+            }
+            usdt_pairs = [
+                symbol
+                for symbol in volume_by_symbol
+                if symbol.endswith("USDT") and not any(symbol.startswith(b) for b in blacklist)
+            ]
+            usdt_pairs.sort(key=lambda symbol: volume_by_symbol[symbol], reverse=True)
+            if len(usdt_pairs) >= limit:
+                return usdt_pairs[:limit]
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        print(f"  [!] Futures universe fallback: {exc}")
+    return DEFAULT_TOP_FUTURES[:limit]
+
+
+def get_funding_rates() -> Dict[str, float]:
+    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+    try:
+        resp = requests.get(url, timeout=HTTP_TIMEOUT_SECONDS)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return {
+                item["symbol"]: float(item.get("lastFundingRate", 0)) * 100
+                for item in data
+                if isinstance(item, dict) and item.get("symbol")
+            }
