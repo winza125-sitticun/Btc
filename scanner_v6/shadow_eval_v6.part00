@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import statistics
+from contextlib import contextmanager
+import uuid
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional
+
+
+SNAPSHOT_COLUMNS = (
+    "id", "created_at_ms", "created_at_iso", "symbol", "side", "data_provider", "btc_bias",
+    "entry", "sl", "tp1", "tp2", "tp3", "risk_distance", "score_total", "score_valid",
+    "score_reason", "score_components_json", "r4", "r1", "r15", "adx", "di_plus", "di_minus",
+    "rsi", "funding_pct", "setup_bucket", "astra_verdict", "astra_confidence", "final_decision",
+    "alert_sent",
+)
+
+
+class ShadowStore:
+    def __init__(self, db_path: str):
+        self.db_path = str(db_path)
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    @contextmanager
+    def _connect(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _init_schema(self) -> None:
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS setup_snapshots (
+                    id TEXT PRIMARY KEY,
+                    created_at_ms INTEGER NOT NULL,
+                    created_at_iso TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL CHECK(side IN ('LONG','SHORT')),
+                    data_provider TEXT NOT NULL,
+                    btc_bias TEXT NOT NULL,
+                    entry REAL NOT NULL,
+                    sl REAL NOT NULL,
+                    tp1 REAL,
+                    tp2 REAL,
+                    tp3 REAL,
+                    risk_distance REAL NOT NULL CHECK(risk_distance > 0),
+                    score_total INTEGER NOT NULL,
+                    score_valid INTEGER NOT NULL CHECK(score_valid IN (0,1)),
+                    score_reason TEXT NOT NULL,
+                    score_components_json TEXT NOT NULL,
+                    r4 TEXT,
+                    r1 TEXT,
+                    r15 TEXT,
+                    adx REAL,
+                    di_plus REAL,
+                    di_minus REAL,
+                    rsi REAL,
+                    funding_pct REAL,
+                    setup_bucket INTEGER NOT NULL,
+                    astra_verdict TEXT,
+                    astra_confidence INTEGER,
+                    final_decision TEXT NOT NULL DEFAULT 'PENDING_SCORE',
+                    alert_sent INTEGER NOT NULL DEFAULT 0 CHECK(alert_sent IN (0,1)),
+                    UNIQUE(symbol, side, setup_bucket)
+                );
+
+                CREATE TABLE IF NOT EXISTS setup_outcomes (
+                    snapshot_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'OPEN',
+                    evaluated_through_ms INTEGER,
+                    sl_touched_at_ms INTEGER,
+                    tp1_touched_at_ms INTEGER,
+                    tp2_touched_at_ms INTEGER,
+                    tp3_touched_at_ms INTEGER,
+                    mfe_r REAL,
+                    mae_r REAL,
+                    closed_at_ms INTEGER,
+                    FOREIGN KEY(snapshot_id) REFERENCES setup_snapshots(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS calibration_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at_ms INTEGER NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    report_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_shadow_pending ON setup_outcomes(status);
+                CREATE INDEX IF NOT EXISTS idx_shadow_created ON setup_snapshots(created_at_ms);
+                CREATE INDEX IF NOT EXISTS idx_shadow_score ON setup_snapshots(score_total);
+                """
+            )
+
+    @staticmethod
+    def _decode_snapshot(row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        result["score_valid"] = bool(result["score_valid"])
+        result["score_components"] = json.loads(result.pop("score_components_json") or "{}")
+        return result
+
+    def get_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM setup_snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+        return self._decode_snapshot(row) if row else None
+
+    def record_snapshot(self, snapshot: Dict[str, Any], cooldown_seconds: int) -> tuple[str, bool]:
+        cooldown_ms = max(1, int(cooldown_seconds)) * 1000
+        created_at_ms = int(snapshot["created_at_ms"])
+        setup_bucket = created_at_ms // cooldown_ms
+        snapshot_id = str(uuid.uuid4())
+        score_components_json = json.dumps(snapshot.get("score_components") or {}, ensure_ascii=False, sort_keys=True)
+
+        values = {
+            "id": snapshot_id,
+            "created_at_ms": created_at_ms,
+            "created_at_iso": str(snapshot["created_at_iso"]),
+            "symbol": str(snapshot["symbol"]),
+            "side": str(snapshot["side"]).upper(),
+            "data_provider": str(snapshot["data_provider"]).upper(),
+            "btc_bias": str(snapshot["btc_bias"]).upper(),
+            "entry": float(snapshot["entry"]),
+            "sl": float(snapshot["sl"]),
+            "tp1": None if snapshot.get("tp1") is None else float(snapshot["tp1"]),
+            "tp2": None if snapshot.get("tp2") is None else float(snapshot["tp2"]),
+            "tp3": None if snapshot.get("tp3") is None else float(snapshot["tp3"]),
+            "risk_distance": float(snapshot["risk_distance"]),
+            "score_total": int(snapshot.get("score_total", 0)),
+            "score_valid": 1 if snapshot.get("score_valid") else 0,
+            "score_reason": str(snapshot.get("score_reason", "")),
+            "score_components_json": score_components_json,
+            "r4": snapshot.get("r4"),
+            "r1": snapshot.get("r1"),
+            "r15": snapshot.get("r15"),
+            "adx": snapshot.get("adx"),
+            "di_plus": snapshot.get("di_plus"),
+            "di_minus": snapshot.get("di_minus"),
+            "rsi": snapshot.get("rsi"),
+            "funding_pct": snapshot.get("funding_pct"),
+            "setup_bucket": setup_bucket,
+        }
+
+        sql = """
+            INSERT INTO setup_snapshots (
+                id, created_at_ms, created_at_iso, symbol, side, data_provider, btc_bias,
+                entry, sl, tp1, tp2, tp3, risk_distance, score_total, score_valid,
+                score_reason, score_components_json, r4, r1, r15, adx, di_plus, di_minus,
+                rsi, funding_pct, setup_bucket
+            ) VALUES (
+                :id, :created_at_ms, :created_at_iso, :symbol, :side, :data_provider, :btc_bias,
+                :entry, :sl, :tp1, :tp2, :tp3, :risk_distance, :score_total, :score_valid,
+                :score_reason, :score_components_json, :r4, :r1, :r15, :adx, :di_plus, :di_minus,
+                :rsi, :funding_pct, :setup_bucket
+            )
+        """
+        with self._connect() as conn:
+            try:
+                conn.execute(sql, values)
+                conn.execute(
+                    "INSERT INTO setup_outcomes(snapshot_id, status) VALUES (?, 'OPEN')",
+                    (snapshot_id,),
+                )
+                return snapshot_id, True
+            except sqlite3.IntegrityError:
+                row = conn.execute(
+                    "SELECT id FROM setup_snapshots WHERE symbol = ? AND side = ? AND setup_bucket = ?",
+                    (values["symbol"], values["side"], setup_bucket),
+                ).fetchone()
+                if not row:
+                    raise
+                return str(row["id"]), False
+
+    def update_decision(
+        self,
+        snapshot_id: str,
+        *,
+        astra_verdict: Optional[str],
+        astra_confidence: Optional[int],
+        final_decision: str,
+        alert_sent: bool,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE setup_snapshots
+                SET astra_verdict = ?, astra_confidence = ?, final_decision = ?, alert_sent = ?
+                WHERE id = ?
+                """,
+                (
+                    None if astra_verdict is None else str(astra_verdict).upper(),
+                    None if astra_confidence is None else int(astra_confidence),
+                    str(final_decision).upper(),
+                    1 if alert_sent else 0,
+                    snapshot_id,
+                ),
+            )
+
+    def list_pending(self, now_ms: int, horizon_ms: int) -> list[Dict[str, Any]]:
+        del horizon_ms  # Open rows older than the horizon still need one pass to become EXPIRED/NO_DATA.
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.*, o.status AS outcome_status, o.evaluated_through_ms,
+                       o.sl_touched_at_ms, o.tp1_touched_at_ms, o.tp2_touched_at_ms,
+                       o.tp3_touched_at_ms, o.mfe_r, o.mae_r, o.closed_at_ms
+                FROM setup_snapshots s
+                JOIN setup_outcomes o ON o.snapshot_id = s.id
+                WHERE o.status = 'OPEN' AND s.created_at_ms <= ?
+                ORDER BY s.created_at_ms ASC
