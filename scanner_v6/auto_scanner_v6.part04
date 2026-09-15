@@ -1,0 +1,146 @@
+                "price": price,
+                "chg": chg,
+                "funding": funding,
+                "r4": r4,
+                "r1": r1,
+                "r15": r15,
+                "rsi": rsi1,
+                "adx": adx1,
+                "tags": tags,
+                "plan": plan,
+                "setup_score": setup_score_result,
+                "data_provider": provider_name,
+                "shadow_snapshot_id": shadow_snapshot_id,
+                "shadow_inserted": shadow_inserted,
+            }
+        )
+
+    print(f"\n[*] Setup Score Gate Passed (>= {SETUP_MIN_SCORE}): {len(qualified_setups)} setups.")
+    print("-" * 120)
+    print("{:<6} {:<10} {:<12} {:<16} {:<16} {:<8} {:<8} {:<10}".format(
+        "Side", "Symbol", "Entry", "Stop Loss", "TP1", "RSI", "ADX", "Funding%"
+    ))
+    print("-" * 120)
+
+    curr_t = time.time()
+    for item in qualified_setups:
+        p = item["plan"]
+        rsi_val = f"{item['rsi']:.1f}" if item["rsi"] is not None else "N/A"
+        sl_sign = "-" if item["side"] == "LONG" else "+"
+        tp_sign = "+" if item["side"] == "LONG" else "-"
+        sl_str = f"{format_price(p['sl'])} ({sl_sign}{p['sl_pct']:.1f}%)"
+        tp1_str = f"{format_price(p['tp1'])} ({tp_sign}{p['tp1_pct']:.1f}%)"
+
+        print("{:<6} {:<10} {:<12} {:<16} {:<16} {:<8} {:<8.1f} {:<+10.4f}".format(
+            item["side"], item["symbol"], format_price(p["entry"]), sl_str, tp1_str,
+            rsi_val, item["adx"], item["funding"]
+        ))
+
+        key = f"{item['symbol']}_{item['side']}"
+        if curr_t - recent_signals.get(key, 0) <= ALERT_COOLDOWN_SECONDS:
+            if item.get("shadow_inserted"):
+                shadow_store.update_decision(
+                    item["shadow_snapshot_id"], astra_verdict=None, astra_confidence=None,
+                    final_decision="WAIT_COOLDOWN", alert_sent=False,
+                )
+            continue
+
+        print(f"\n  🧠 Requesting Devil's Advocate AI review for #{item['symbol']}...")
+        ai_res = analyze_with_ai(
+            item["symbol"], item["side"], p["entry"], item["r4"], item["r1"], item["r15"],
+            item["rsi"] if item["rsi"] is not None else 50.0,
+            item["adx"], item["funding"], btc_bias, item["tags"], item["plan"], item["setup_score"],
+        )
+        print(f"     -> Astra Confidence: {ai_res.get('confidence', 0)}% | Verdict: {ai_res.get('verdict', 'REJECT')}")
+
+        if not ai_decision_is_approved(ai_res, AI_MIN_CONFIDENCE):
+            verdict = ai_res.get("verdict", "REJECT")
+            print(f"     [x] Astra {verdict}/fail-closed: {ai_res.get('risk', 'unknown risk')}")
+            if item.get("shadow_inserted"):
+                final_state = "WAIT_ASTRA" if str(verdict).upper() == "WAIT" else "REJECT_ASTRA"
+                shadow_store.update_decision(
+                    item["shadow_snapshot_id"],
+                    astra_verdict=str(verdict).upper(),
+                    astra_confidence=ai_res.get("confidence"),
+                    final_decision=final_state,
+                    alert_sent=False,
+                )
+            continue
+
+        icon = "🟢 *[STRUCTURE LONG]*" if item["side"] == "LONG" else "🔴 *[STRUCTURE SHORT]*"
+        target_lines = [
+            f"💰 *TP1:* `{format_price(p['tp1'])}` ({tp_sign}{p['tp1_pct']:.2f}% | R:R 1:{p['rr_tp1']:.2f})"
+        ]
+        if p.get("tp2") is not None:
+            target_lines.append(
+                f"🚀 *TP2:* `{format_price(p['tp2'])}` ({tp_sign}{p['tp2_pct']:.2f}% | R:R 1:{p['rr_tp2']:.2f})"
+            )
+        if p.get("tp3") is not None:
+            target_lines.append(
+                f"🏁 *TP3:* `{format_price(p['tp3'])}` ({tp_sign}{p['tp3_pct']:.2f}% | R:R 1:{p['rr_tp3']:.2f})"
+            )
+        targets_text = "\n".join(target_lines)
+        score = item["setup_score"]
+        comp = score["components"]
+        msg = (
+            f"{icon} `#{item['symbol']}`\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🧠 *Setup Score:* `{score['score']}/100`\n"
+            f"Trend `{comp['trend']}/20` | Strength `{comp['strength']}/15` | Structure `{comp['structure']}/30`\n"
+            f"Market `{comp['market']}/15` | Funding `{comp['funding']}/10` | Timing `{comp['timing']}/10`\n"
+            f"🤖 *Astra:* `APPROVED` | *Confidence:* `{ai_res['confidence']}%`\n"
+            f"✅ *Final Decision:* `{item['side']}`\n"
+            f"💡 *เหตุผล:* {ai_res.get('reason', '')}\n"
+            f"⚠️ *จุดเสี่ยง:* {ai_res.get('risk', '')}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"👑 *BTC Bias:* `{btc_bias}` | *ADX:* `{item['adx']:.1f}`\n"
+            f"🛰 *Market Data:* `{item['data_provider']}` | *Signal:* `TradingView BINANCE`\n"
+            f"🎯 *Entry:* `{format_price(p['entry'])}`\n"
+            f"🛑 *Stop Loss:* `{format_price(p['sl'])}` ({sl_sign}{p['sl_pct']:.2f}%)\n"
+            f"🧱 *Structure Stop:* `{format_price(p['structure_stop'])}` | *ATR:* `{format_price(p['atr'])}`\n"
+            f"{targets_text}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 *Trend:* 4H=`{item['r4']}` / 1H=`{item['r1']}` / 15m=`{item['r15']}` | *RSI:* `{rsi_val}`\n"
+            f"💡 *Invalidation:* {p['invalidation']}"
+        )
+
+        alert_sent = send_telegram_alert(msg)
+        if item.get("shadow_inserted"):
+            shadow_store.update_decision(
+                item["shadow_snapshot_id"],
+                astra_verdict="APPROVED",
+                astra_confidence=ai_res.get("confidence"),
+                final_decision=item["side"],
+                alert_sent=alert_sent,
+            )
+        if alert_sent:
+            recent_signals[key] = curr_t
+            print(f"🔥 [ALERT SENT] -> #{item['symbol']}")
+        else:
+            print(f"[x] Alert delivery failed; cooldown not started for #{item['symbol']}")
+
+    print("-" * 120)
+    return recent_signals
+
+
+def main(interval: int = 5, limit: int = 40):
+    print(f"🤖 Analysis Engine V6 Shadow Evaluation started. Scanning every {interval} min(s).")
+    print("🔒 Mode: decision-support only; no order execution code is present.")
+    signals: Dict[str, float] = {}
+    while True:
+        try:
+            signals = run_scan_cycle(limit=limit, recent_signals=signals)
+        except KeyboardInterrupt:
+            print("\nStopped by user.")
+            break
+        except Exception as exc:
+            print(f"[x] Scan cycle error (fail-closed): {exc}")
+        time.sleep(interval * 60)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Crypto Futures Analysis Engine V6 (shadow evaluation + calibration)")
+    parser.add_argument("--interval", type=int, default=5, help="Scan interval in minutes")
+    parser.add_argument("--limit", type=int, default=40, help="Number of futures symbols to scan")
+    args = parser.parse_args()
+    main(interval=args.interval, limit=args.limit)
