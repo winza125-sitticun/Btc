@@ -1,0 +1,220 @@
+def calculate_atr(candles, period=14):
+    """Simple ATR over the most recent `period` true ranges."""
+    if period <= 0 or len(candles) < period + 1:
+        return None
+    if not all(_valid_candle(c) for c in candles[-(period + 1):]):
+        return None
+
+    true_ranges = []
+    start = len(candles) - period
+    for i in range(start, len(candles)):
+        current = candles[i]
+        previous = candles[i - 1]
+        high = float(current["high"])
+        low = float(current["low"])
+        prev_close = float(previous["close"])
+        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+
+    return sum(true_ranges) / period if true_ranges else None
+
+
+def find_confirmed_swings(candles, window=2):
+    """Return confirmed local highs/lows, excluding edge candles."""
+    if window < 1 or len(candles) < (window * 2 + 1):
+        return {"highs": [], "lows": []}
+    if not all(_valid_candle(c) for c in candles):
+        return {"highs": [], "lows": []}
+
+    highs = []
+    lows = []
+    for i in range(window, len(candles) - window):
+        high = float(candles[i]["high"])
+        low = float(candles[i]["low"])
+        neighbors = candles[i - window:i] + candles[i + 1:i + window + 1]
+        if all(high > float(c["high"]) for c in neighbors):
+            highs.append({"index": i, "price": high})
+        if all(low < float(c["low"]) for c in neighbors):
+            lows.append({"index": i, "price": low})
+    return {"highs": highs, "lows": lows}
+
+
+def _dedupe_levels(levels, tolerance):
+    result = []
+    for level in sorted(float(v) for v in levels if v is not None):
+        if not result or abs(level - result[-1]) > tolerance:
+            result.append(level)
+    return result
+
+
+def build_structure_trade_plan(
+    side,
+    entry_price,
+    candles_1h,
+    candles_4h=None,
+    pivot_levels=None,
+    min_rr=1.5,
+    atr_period=14,
+    atr_buffer_mult=0.25,
+    swing_window=2,
+):
+    """Build a fail-closed structure plan from confirmed swings + ATR buffer."""
+    side = str(side).upper()
+    if side not in {"LONG", "SHORT"} or entry_price is None or entry_price <= 0:
+        return None
+    if min_rr <= 0 or atr_buffer_mult < 0:
+        return None
+
+    candles_4h = candles_4h or []
+    pivot_levels = pivot_levels or []
+    atr = calculate_atr(candles_1h, period=atr_period)
+    if atr is None or atr <= 0:
+        return None
+
+    swings_1h = find_confirmed_swings(candles_1h, window=swing_window)
+    swings_4h = find_confirmed_swings(candles_4h, window=swing_window) if candles_4h else {"highs": [], "lows": []}
+    buffer_dist = atr * atr_buffer_mult
+
+    if side == "LONG":
+        stop_candidates = [s for s in swings_1h["lows"] if s["price"] < entry_price]
+        if not stop_candidates:
+            return None
+        structure_stop = stop_candidates[-1]["price"]
+        sl = structure_stop - buffer_dist
+        if sl >= entry_price:
+            return None
+        target_levels = [s["price"] for s in swings_1h["highs"] if s["price"] > entry_price]
+        target_levels += [s["price"] for s in swings_4h["highs"] if s["price"] > entry_price]
+        target_levels += [float(v) for v in pivot_levels if v is not None and float(v) > entry_price]
+    else:
+        stop_candidates = [s for s in swings_1h["highs"] if s["price"] > entry_price]
+        if not stop_candidates:
+            return None
+        structure_stop = stop_candidates[-1]["price"]
+        sl = structure_stop + buffer_dist
+        if sl <= entry_price:
+            return None
+        target_levels = [s["price"] for s in swings_1h["lows"] if s["price"] < entry_price]
+        target_levels += [s["price"] for s in swings_4h["lows"] if s["price"] < entry_price]
+        target_levels += [float(v) for v in pivot_levels if v is not None and float(v) < entry_price]
+
+    risk_dist = abs(entry_price - sl)
+    if risk_dist <= 0:
+        return None
+
+    tolerance = max(entry_price * 0.0001, atr * 0.05)
+    targets = _dedupe_levels(target_levels, tolerance)
+    if side == "SHORT":
+        targets = list(reversed(targets))
+    if not targets:
+        return None
+
+    rr_values = [abs(target - entry_price) / risk_dist for target in targets]
+    if rr_values[0] < min_rr:
+        return None
+
+    selected = targets[:3]
+    selected_rr = rr_values[:3]
+    result = {
+        "entry": float(entry_price),
+        "sl": sl,
+        "sl_pct": risk_dist / entry_price * 100,
+        "structure_stop": structure_stop,
+        "atr": atr,
+        "atr_buffer": buffer_dist,
+        "target_source": "STRUCTURE",
+        "invalidation": (
+            "แท่ง 1H ปิดต่ำกว่า swing low ที่ใช้เป็นโครงสร้างหยุดขาดทุน"
+            if side == "LONG"
+            else "แท่ง 1H ปิดเหนือ swing high ที่ใช้เป็นโครงสร้างหยุดขาดทุน"
+        ),
+    }
+    for idx in range(3):
+        key = idx + 1
+        if idx < len(selected):
+            target = selected[idx]
+            result[f"tp{key}"] = target
+            result[f"tp{key}_pct"] = abs(target - entry_price) / entry_price * 100
+            result[f"rr_tp{key}"] = selected_rr[idx]
+        else:
+            result[f"tp{key}"] = None
+            result[f"tp{key}_pct"] = None
+            result[f"rr_tp{key}"] = None
+    return result
+
+
+def parse_futures_klines(raw, now_ms=None):
+    """Parse Binance-style kline rows and keep closed candles only."""
+    import time as _time
+
+    if not isinstance(raw, list):
+        return []
+    if now_ms is None:
+        now_ms = int(_time.time() * 1000)
+
+    candles = []
+    try:
+        for row in raw:
+            if not isinstance(row, (list, tuple)) or len(row) < 7:
+                return []
+            close_time = int(row[6])
+            if close_time >= now_ms:
+                continue
+            candle = {
+                "open_time": int(row[0]),
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+                "close_time": close_time,
+            }
+            if not _valid_candle(candle):
+                return []
+            candles.append(candle)
+    except (TypeError, ValueError, IndexError):
+        return []
+    return candles
+
+
+def extract_classic_pivot_targets(indicators, side):
+    """Extract TradingView monthly Classic pivot targets for the trade direction."""
+    if not isinstance(indicators, dict):
+        return []
+    side = str(side).upper()
+    prefix = "R" if side == "LONG" else "S" if side == "SHORT" else None
+    if prefix is None:
+        return []
+
+    result = []
+    for level in (1, 2, 3):
+        value = indicators.get(f"Pivot.M.Classic.{prefix}{level}")
+        if isinstance(value, (int, float)):
+            result.append(float(value))
+    return result
+
+
+def normalize_ai_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate Astra output. WAIT is valid, but only APPROVED may pass the final gate."""
+    if not isinstance(result, dict):
+        raise ValueError("AI result must be an object")
+    confidence = int(result.get("confidence"))
+    verdict = str(result.get("verdict", "")).strip().upper()
+    if not 0 <= confidence <= 100 or verdict not in {"APPROVED", "WAIT", "REJECT"}:
+        raise ValueError("Invalid AI confidence/verdict")
+    return {
+        "confidence": confidence,
+        "verdict": verdict,
+        "reason": str(result.get("reason", "")).strip(),
+        "risk": str(result.get("risk", "")).strip(),
+    }
+
+
+def ai_decision_is_approved(result: Optional[Dict[str, Any]], min_confidence: int) -> bool:
+    """Fail closed: malformed/missing AI output can never approve a setup."""
+    if not isinstance(result, dict):
+        return False
+    try:
+        normalized = normalize_ai_result(result)
+    except (TypeError, ValueError):
+        return False
+    return normalized["verdict"] == "APPROVED" and normalized["confidence"] >= min_confidence
