@@ -1,0 +1,220 @@
+import argparse
+import json
+import os
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+import requests
+
+from setup_score_v6 import score_passes_threshold, score_setup
+from shadow_eval_v6 import ShadowStore, evaluate_snapshot
+
+from market_data_v6 import (
+    BinanceMarketDataProvider,
+    BybitMarketDataProvider,
+    MarketDataSession,
+    price_basis_within_tolerance,
+    select_market_data_session,
+)
+
+# ==========================================================
+# CONFIGURATION
+# Secrets are loaded from environment variables only.
+# ==========================================================
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+
+ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "20.0"))
+MAX_LONG_FUNDING = float(os.getenv("MAX_LONG_FUNDING", "0.0300"))
+MIN_SHORT_FUNDING = float(os.getenv("MIN_SHORT_FUNDING", "-0.0400"))
+AI_MIN_CONFIDENCE = int(os.getenv("AI_MIN_CONFIDENCE", "75"))
+SETUP_MIN_SCORE = int(os.getenv("SETUP_MIN_SCORE", "75"))
+ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "3600"))
+HTTP_TIMEOUT_SECONDS = float(os.getenv("HTTP_TIMEOUT_SECONDS", "8"))
+STRUCTURE_KLINE_LIMIT = int(os.getenv("STRUCTURE_KLINE_LIMIT", "120"))
+STRUCTURE_SWING_WINDOW = int(os.getenv("STRUCTURE_SWING_WINDOW", "2"))
+STRUCTURE_ATR_PERIOD = int(os.getenv("STRUCTURE_ATR_PERIOD", "14"))
+STRUCTURE_ATR_BUFFER_MULT = float(os.getenv("STRUCTURE_ATR_BUFFER_MULT", "0.25"))
+MIN_STRUCTURE_RR = float(os.getenv("MIN_STRUCTURE_RR", "1.5"))
+MARKET_PRICE_BASIS_MAX_DIFF_PCT = float(os.getenv("MARKET_PRICE_BASIS_MAX_DIFF_PCT", "1.0"))
+MARKET_PROVIDER_PROBE_KLINE_LIMIT = int(os.getenv("MARKET_PROVIDER_PROBE_KLINE_LIMIT", "20"))
+SHADOW_DB_PATH = os.getenv("SHADOW_DB_PATH", "shadow_eval_v6.sqlite3").strip() or "shadow_eval_v6.sqlite3"
+SHADOW_HORIZON_HOURS = int(os.getenv("SHADOW_HORIZON_HOURS", "48"))
+SHADOW_SETUP_COOLDOWN_SECONDS = int(os.getenv("SHADOW_SETUP_COOLDOWN_SECONDS", "3600"))
+SHADOW_EVAL_KLINE_LIMIT = int(os.getenv("SHADOW_EVAL_KLINE_LIMIT", "240"))
+SHADOW_MIN_TOTAL_SAMPLES = int(os.getenv("SHADOW_MIN_TOTAL_SAMPLES", "100"))
+SHADOW_MIN_BUCKET_SAMPLES = int(os.getenv("SHADOW_MIN_BUCKET_SAMPLES", "30"))
+
+_SHADOW_STORE = None
+_SHADOW_STORE_FAILED = False
+
+BUY_RECS = {"BUY", "STRONG_BUY"}
+SELL_RECS = {"SELL", "STRONG_SELL"}
+
+DEFAULT_TOP_FUTURES = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT",
+    "SUIUSDT", "NEARUSDT", "AVAXUSDT", "LINKUSDT", "PEPEUSDT", "WIFUSDT", "APTUSDT",
+    "ARBUSDT", "OPUSDT", "TAOUSDT", "FETUSDT", "RENDERUSDT", "INJUSDT", "TIAUSDT",
+    "SEIUSDT", "SHIBUSDT", "DOTUSDT", "LTCUSDT", "UNIUSDT", "FILUSDT", "ATOMUSDT",
+    "TRXUSDT", "FTMUSDT", "AAVEUSDT", "KASUSDT", "STXUSDT", "ORDIUSDT", "RUNEUSDT",
+]
+
+
+def create_market_data_session(
+    limit: int,
+    providers=None,
+    probe_kline_limit: int = MARKET_PROVIDER_PROBE_KLINE_LIMIT,
+    min_probe_candles: int = STRUCTURE_ATR_PERIOD + 1,
+):
+    if providers is None:
+        providers = [
+            BinanceMarketDataProvider(timeout=HTTP_TIMEOUT_SECONDS),
+            BybitMarketDataProvider(timeout=HTTP_TIMEOUT_SECONDS),
+        ]
+    return select_market_data_session(
+        providers,
+        limit=limit,
+        probe_kline_limit=probe_kline_limit,
+        min_probe_candles=min_probe_candles,
+    )
+
+
+def market_price_basis_ok(
+    session: Optional[MarketDataSession],
+    symbol: str,
+    tradingview_price: Optional[float],
+    max_diff_pct: float = MARKET_PRICE_BASIS_MAX_DIFF_PCT,
+) -> bool:
+    if session is None:
+        return False
+    provider_price = session.snapshot.last_price.get(symbol)
+    return price_basis_within_tolerance(tradingview_price, provider_price, max_diff_pct)
+
+
+
+def get_shadow_store() -> Optional[ShadowStore]:
+    """Lazily initialize persistent shadow storage. Failure is sticky and fail-closed."""
+    global _SHADOW_STORE, _SHADOW_STORE_FAILED
+    if _SHADOW_STORE_FAILED:
+        return None
+    if _SHADOW_STORE is not None:
+        return _SHADOW_STORE
+    try:
+        _SHADOW_STORE = ShadowStore(SHADOW_DB_PATH)
+        return _SHADOW_STORE
+    except Exception as exc:
+        _SHADOW_STORE_FAILED = True
+        print(f"[x] Shadow DB unavailable. Fail-closed: {exc}")
+        return None
+
+
+def run_shadow_evaluation_cycle(
+    store: ShadowStore,
+    market_session: MarketDataSession,
+    now_ms: Optional[int] = None,
+) -> Dict[str, int]:
+    """Advance pending shadow outcomes using the provider locked for this scan cycle."""
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    horizon_ms = max(1, SHADOW_HORIZON_HOURS) * 3600 * 1000
+    stats = {"pending": 0, "evaluated": 0, "provider_mismatch": 0, "closed": 0}
+    try:
+        pending = store.list_pending(now_ms=now_ms, horizon_ms=horizon_ms)
+    except Exception as exc:
+        print(f"  [!] Shadow pending query failed: {exc}")
+        return stats
+
+    stats["pending"] = len(pending)
+    provider_name = str(market_session.snapshot.provider).upper()
+    for snapshot in pending:
+        if str(snapshot.get("data_provider", "")).upper() != provider_name:
+            stats["provider_mismatch"] += 1
+            continue
+        symbol = snapshot.get("symbol")
+        if not symbol:
+            continue
+        try:
+            candles = market_session.provider.get_klines(symbol, "15m", SHADOW_EVAL_KLINE_LIMIT)
+            outcome = evaluate_snapshot(snapshot, candles, horizon_ms=horizon_ms, now_ms=now_ms)
+            store.update_outcome(snapshot["id"], outcome)
+            stats["evaluated"] += 1
+            if outcome.get("status") != "OPEN":
+                stats["closed"] += 1
+        except Exception as exc:
+            print(f"  [!] Shadow evaluation failed for {symbol}: {exc}")
+    return stats
+
+
+def _shadow_snapshot_payload(
+    *,
+    symbol: str,
+    side: str,
+    provider_name: str,
+    btc_bias: str,
+    plan: Dict[str, Any],
+    score_result: Dict[str, Any],
+    r4: Optional[str],
+    r1: Optional[str],
+    r15: Optional[str],
+    adx: Optional[float],
+    di_plus: Optional[float],
+    di_minus: Optional[float],
+    rsi: Optional[float],
+    funding: Optional[float],
+    created_at_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    if created_at_ms is None:
+        created_at_ms = int(time.time() * 1000)
+    entry = float(plan["entry"])
+    sl = float(plan["sl"])
+    return {
+        "created_at_ms": int(created_at_ms),
+        "created_at_iso": datetime.fromtimestamp(created_at_ms / 1000.0, tz=timezone.utc).isoformat(),
+        "symbol": symbol,
+        "side": side,
+        "data_provider": provider_name,
+        "btc_bias": btc_bias,
+        "entry": entry,
+        "sl": sl,
+        "tp1": plan.get("tp1"),
+        "tp2": plan.get("tp2"),
+        "tp3": plan.get("tp3"),
+        "risk_distance": abs(entry - sl),
+        "score_total": int(score_result.get("score", 0)) if isinstance(score_result, dict) else 0,
+        "score_valid": bool(score_result.get("valid")) if isinstance(score_result, dict) else False,
+        "score_reason": str(score_result.get("reason", "INVALID_SCORE")) if isinstance(score_result, dict) else "INVALID_SCORE",
+        "score_components": dict(score_result.get("components") or {}) if isinstance(score_result, dict) else {},
+        "r4": r4,
+        "r1": r1,
+        "r15": r15,
+        "adx": adx,
+        "di_plus": di_plus,
+        "di_minus": di_minus,
+        "rsi": rsi,
+        "funding_pct": funding,
+    }
+
+
+def format_price(p: float) -> str:
+    if p >= 1000:
+        return f"{p:,.2f}"
+    if p >= 1:
+        return f"{p:.4f}"
+    if p >= 0.01:
+        return f"{p:.5f}"
+    return f"{p:.8f}"
+
+
+def _valid_candle(candle: Dict[str, Any]) -> bool:
+    try:
+        high = float(candle["high"])
+        low = float(candle["low"])
+        close = float(candle["close"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return high >= low and low <= close <= high
+
+
