@@ -145,6 +145,146 @@
     return recent_signals
 
 
+_run_scan_cycle_without_telemetry = run_scan_cycle
+
+
+def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] = None):
+    """Run one legacy scan cycle and emit observation-only funnel counters."""
+    counters = {
+        "universe": 0,
+        "tv_ready": 0,
+        "aligned": 0,
+        "filters_passed": 0,
+        "structure_passed": 0,
+        "rez_entered": 0,
+        "rez_pass": 0,
+        "rez_wait": 0,
+        "rez_reject": 0,
+        "score_ge_75": 0,
+        "astra_called": 0,
+        "alerts_sent": 0,
+    }
+    score_attempts = 0
+    rez_wait_results = 0
+    btc_basis_calls = 0
+
+    original_create_market_data_session = create_market_data_session
+    original_market_price_basis_ok = market_price_basis_ok
+    original_setup_passes_filters = setup_passes_filters
+    original_build_structure_trade_plan = build_structure_trade_plan
+    original_analyze_rez_candidate = analyze_rez_candidate
+    original_score_setup = score_setup
+    original_score_passes_threshold = score_passes_threshold
+    original_analyze_with_ai = analyze_with_ai
+    original_send_telegram_alert = send_telegram_alert
+
+    def counted_create_market_data_session(*args, **kwargs):
+        session = original_create_market_data_session(*args, **kwargs)
+        if session is not None:
+            counters["universe"] = len(list(session.snapshot.symbols))
+        return session
+
+    def counted_market_price_basis_ok(session, symbol, *args, **kwargs):
+        nonlocal btc_basis_calls
+        result = original_market_price_basis_ok(session, symbol, *args, **kwargs)
+        if symbol == "BTCUSDT" and btc_basis_calls == 0:
+            btc_basis_calls += 1
+        else:
+            counters["tv_ready"] += 1
+            if symbol == "BTCUSDT":
+                btc_basis_calls += 1
+        return result
+
+    def counted_setup_passes_filters(*args, **kwargs):
+        counters["aligned"] += 1
+        result = original_setup_passes_filters(*args, **kwargs)
+        if result:
+            counters["filters_passed"] += 1
+        return result
+
+    def counted_build_structure_trade_plan(*args, **kwargs):
+        result = original_build_structure_trade_plan(*args, **kwargs)
+        if result:
+            counters["structure_passed"] += 1
+        return result
+
+    def counted_analyze_rez_candidate(*args, **kwargs):
+        nonlocal rez_wait_results
+        counters["rez_entered"] += 1
+        result = original_analyze_rez_candidate(*args, **kwargs)
+        if getattr(result, "state", None) == "WAIT":
+            rez_wait_results += 1
+        return result
+
+    def counted_score_setup(*args, **kwargs):
+        nonlocal score_attempts
+        score_attempts += 1
+        return original_score_setup(*args, **kwargs)
+
+    def counted_score_passes_threshold(*args, **kwargs):
+        result = original_score_passes_threshold(*args, **kwargs)
+        if result:
+            counters["score_ge_75"] += 1
+        return result
+
+    def counted_analyze_with_ai(*args, **kwargs):
+        counters["astra_called"] += 1
+        return original_analyze_with_ai(*args, **kwargs)
+
+    def counted_send_telegram_alert(*args, **kwargs):
+        result = original_send_telegram_alert(*args, **kwargs)
+        if result:
+            counters["alerts_sent"] += 1
+        return result
+
+    globals()["create_market_data_session"] = counted_create_market_data_session
+    globals()["market_price_basis_ok"] = counted_market_price_basis_ok
+    globals()["setup_passes_filters"] = counted_setup_passes_filters
+    globals()["build_structure_trade_plan"] = counted_build_structure_trade_plan
+    globals()["analyze_rez_candidate"] = counted_analyze_rez_candidate
+    globals()["score_setup"] = counted_score_setup
+    globals()["score_passes_threshold"] = counted_score_passes_threshold
+    globals()["analyze_with_ai"] = counted_analyze_with_ai
+    globals()["send_telegram_alert"] = counted_send_telegram_alert
+
+    try:
+        return _run_scan_cycle_without_telemetry(limit=limit, recent_signals=recent_signals)
+    finally:
+        globals()["create_market_data_session"] = original_create_market_data_session
+        globals()["market_price_basis_ok"] = original_market_price_basis_ok
+        globals()["setup_passes_filters"] = original_setup_passes_filters
+        globals()["build_structure_trade_plan"] = original_build_structure_trade_plan
+        globals()["analyze_rez_candidate"] = original_analyze_rez_candidate
+        globals()["score_setup"] = original_score_setup
+        globals()["score_passes_threshold"] = original_score_passes_threshold
+        globals()["analyze_with_ai"] = original_analyze_with_ai
+        globals()["send_telegram_alert"] = original_send_telegram_alert
+
+        if REZ_ANALYSIS_ENABLED:
+            counters["rez_pass"] = score_attempts
+            counters["rez_wait"] = rez_wait_results
+            counters["rez_reject"] = max(
+                0,
+                counters["rez_entered"] - counters["rez_pass"] - counters["rez_wait"],
+            )
+
+        print(
+            "[*] TELEMETRY: "
+            f"universe={counters['universe']} "
+            f"tv_ready={counters['tv_ready']} "
+            f"aligned={counters['aligned']} "
+            f"filters_passed={counters['filters_passed']} "
+            f"structure_passed={counters['structure_passed']} "
+            f"rez_entered={counters['rez_entered']} "
+            f"rez_pass={counters['rez_pass']} "
+            f"rez_wait={counters['rez_wait']} "
+            f"rez_reject={counters['rez_reject']} "
+            f"score_ge_75={counters['score_ge_75']} "
+            f"astra_called={counters['astra_called']} "
+            f"alerts_sent={counters['alerts_sent']}"
+        )
+
+
 def main(interval: int = 5, limit: int = 40):
     print(f"🤖 Analysis Engine V6 Shadow Evaluation started. Scanning every {interval} min(s).")
     print("🔒 Mode: decision-support only; no order execution code is present.")
