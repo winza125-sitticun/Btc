@@ -27,3 +27,22 @@ jobs:
           cat auto_scanner_v6.part* > auto_scanner_v6.py
       - name: Run Scanner V6 tests
         run: python -m unittest discover -s tests -v
+      - name: Compile assembled runtime
+        run: |
+          python -m py_compile \
+            market_data_v6.py \
+            setup_score_v6.py \
+            shadow_eval_v6.py \
+            shadow_report_v6.py \
+            rez_analysis_v1.py \
+            rez_watch_v1.py \
+            rez_report_v1.py \
+            auto_scanner_v6.py
+      - name: Verify no order execution path
+        run: |
+          if grep -RniE "create_order|place_order|new_order|futures_create_order|/order" \
+            rez_analysis_v1.py rez_watch_v1.py rez_report_v1.py auto_scanner_v6.py; then
+            echo "Unexpected order execution path detected"
+            exit 1
+          fi
+          echo "No order execution path detected"
