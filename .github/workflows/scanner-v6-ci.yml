@@ -1,0 +1,29 @@
+name: Scanner V6 CI
+
+on:
+  push:
+    branches: ["feature/rez-analysis-v1-inline"]
+  pull_request:
+    paths:
+      - "scanner_v6/**"
+      - ".github/workflows/scanner-v6-ci.yml"
+
+jobs:
+  scanner-v6:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scanner_v6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - name: Assemble runtime files
+        run: |
+          cat shadow_eval_v6.part* > shadow_eval_v6.py
+          cat auto_scanner_v6.part* > auto_scanner_v6.py
+      - name: Run Scanner V6 tests
+        run: python -m unittest discover -s tests -v
