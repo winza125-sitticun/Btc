@@ -248,6 +248,30 @@ def _latest_confirmed_opposite_swing(side: str, swings: dict[str, list[dict]], l
     return candidates[-1] if candidates else None
 
 
+def _latest_discrete_breakout_index(side: str, candles: list[dict], breakout_threshold: float) -> Optional[int]:
+    latest_index: Optional[int] = None
+    for index in range(1, len(candles)):
+        previous_close = float(candles[index - 1]["close"])
+        current_close = float(candles[index]["close"])
+        if side == "LONG" and previous_close <= breakout_threshold < current_close:
+            latest_index = index
+        elif side == "SHORT" and previous_close >= breakout_threshold > current_close:
+            latest_index = index
+    return latest_index
+
+
+def _breakout_remains_valid(side: str, candles: list[dict], breakout_index: Optional[int], trigger_level: float) -> bool:
+    if breakout_index is None:
+        return False
+    for row in candles[breakout_index + 1:]:
+        close = float(row["close"])
+        if side == "LONG" and close < trigger_level:
+            return False
+        if side == "SHORT" and close > trigger_level:
+            return False
+    return True
+
+
 def _classify_15m_trigger(
     *,
     side: str,
@@ -309,15 +333,15 @@ def _classify_15m_trigger(
     valid_close = latest_close > trigger_level if side == "LONG" else latest_close < trigger_level
     breakout_threshold = trigger_level + buffer_dist if side == "LONG" else trigger_level - buffer_dist
     prior = candles[:-1]
+    breakout_index = _latest_discrete_breakout_index(side, prior, breakout_threshold)
+    prior_breakout = _breakout_remains_valid(side, prior, breakout_index, trigger_level)
     if side == "LONG":
-        prior_breakout = any(float(row["close"]) > breakout_threshold for row in prior)
         current_breakout = latest_close > breakout_threshold
         previous_invalid = bool(prior) and float(prior[-1]["close"]) < trigger_level
         had_valid_before = any(float(row["close"]) > trigger_level for row in prior[:-1])
         crossed_level = latest_low <= trigger_level <= latest_high
         zone_wick = min(latest_open, latest_close) - latest_low
     else:
-        prior_breakout = any(float(row["close"]) < breakout_threshold for row in prior)
         current_breakout = latest_close < breakout_threshold
         previous_invalid = bool(prior) and float(prior[-1]["close"]) > trigger_level
         had_valid_before = any(float(row["close"]) < trigger_level for row in prior[:-1])
