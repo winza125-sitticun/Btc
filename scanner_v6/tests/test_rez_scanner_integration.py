@@ -105,13 +105,13 @@ class RezScannerGateTests(unittest.TestCase):
         }
 
     @staticmethod
-    def _rez(state, trigger="NO_TRIGGER", reason="WAIT_RETEST"):
+    def _rez(state, trigger="NO_TRIGGER", reason="WAIT_RETEST", supporting=()):
         return RezAnalysisResult(
             analysis_version="REZ_V1",
             state=state,
             structure_1h="PULLBACK",
             trigger_15m=trigger,
-            supporting_triggers=(),
+            supporting_triggers=tuple(supporting),
             reason=reason,
             protected_swing_timestamp=3_600_000,
             protected_swing_price=96.0,
@@ -235,6 +235,60 @@ class RezScannerGateTests(unittest.TestCase):
         calls["score_setup"].assert_not_called()
         calls["astra"].assert_not_called()
         calls["send_alert"].assert_not_called()
+
+    def test_astra_prompt_includes_compact_rez_context(self):
+        rez = self._rez(
+            "PASS",
+            trigger="RETEST",
+            reason="PULLBACK_RETEST_CONFIRMED",
+            supporting=("LIQUIDITY_SWEEP",),
+        )
+        fake_client = mock.Mock()
+        fake_client.models.generate_content.return_value = SimpleNamespace(
+            text='{"confidence":90,"verdict":"APPROVED","reason":"ok","risk":"low"}'
+        )
+        fake_genai = SimpleNamespace(Client=mock.Mock(return_value=fake_client))
+        fake_google = SimpleNamespace(genai=fake_genai)
+        with mock.patch.object(scanner, "GEMINI_API_KEY", "gem-secret"), mock.patch.dict(
+            sys.modules, {"google": fake_google}
+        ):
+            result = scanner.analyze_with_ai(
+                "REZUSDT", "LONG", 100.0, "BUY", "BUY", "BUY",
+                50.0, 30.0, 0.0, "BULLISH", ["ADX=30"],
+                self._plan(), self._score(80), rez_result=rez,
+            )
+        self.assertEqual(result["verdict"], "APPROVED")
+        prompt = fake_client.models.generate_content.call_args.kwargs["contents"]
+        self.assertIn("REZ Analysis: REZ_V1", prompt)
+        self.assertIn("1H Structure: PULLBACK", prompt)
+        self.assertIn("15m Trigger: RETEST", prompt)
+        self.assertIn("Supporting Triggers: LIQUIDITY_SWEEP", prompt)
+        self.assertNotIn("open_time", prompt)
+        self.assertNotIn("close_time", prompt)
+
+    def test_enabled_final_alert_contains_rez_context(self):
+        rez = self._rez(
+            "PASS",
+            trigger="RETEST",
+            reason="PULLBACK_RETEST_CONFIRMED",
+            supporting=("LIQUIDITY_SWEEP",),
+        )
+        calls = self._run_cycle(rez_enabled=True, rez_result=rez, score_value=80)
+        calls["send_alert"].assert_called_once()
+        message = calls["send_alert"].call_args.args[0]
+        self.assertIn("📐 *1H Structure:* `PULLBACK`", message)
+        self.assertIn("⚡ *15m Trigger:* `RETEST + LIQUIDITY_SWEEP`", message)
+        self.assertIn("🧪 *Analysis:* `REZ_V1`", message)
+
+    def test_disabled_final_alert_has_no_rez_context_lines(self):
+        calls = self._run_cycle(rez_enabled=False, score_value=80)
+        calls["send_alert"].assert_called_once()
+        message = calls["send_alert"].call_args.args[0]
+        self.assertNotIn("📐 *1H Structure:*", message)
+        self.assertNotIn("⚡ *15m Trigger:*", message)
+        self.assertNotIn("🧪 *Analysis:*", message)
+        self.assertIn("🎯 *Entry:*", message)
+        self.assertIn("🛑 *Stop Loss:*", message)
 
 
 def sqlite_error(message):
