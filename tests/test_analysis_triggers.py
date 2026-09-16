@@ -157,8 +157,8 @@ def test_volume_confirmation_uses_prior_bars_and_excludes_current():
 def test_retest_success_failure_and_window_are_causal():
     m = _module()
     bars = [
-        candle(0, 9.8, 10.4, 9.7, 10.3),  # origin breakout
-        candle(1, 10.3, 10.5, 9.95, 10.2),  # successful bullish retest
+        candle(0, 9.8, 10.4, 9.7, 10.3),
+        candle(1, 10.3, 10.5, 9.95, 10.2),
     ]
     event = m.evaluate_retest(
         bars,
@@ -264,3 +264,37 @@ def test_unified_analyzer_fails_closed_for_invalid_input():
         "volume_confirmed": False,
         "evidence": {},
     }
+
+
+def test_unified_analyzer_fails_closed_for_malformed_origin_context():
+    m = _module()
+    baseline = [candle(i, 10.0, 10.2, 9.8, 10.0) for i in range(20)]
+    bars = baseline + [candle(20, 10.3, 10.8, 10.25, 10.6)]
+
+    result = m.analyze_15m_trigger(
+        bars,
+        level=10.0,
+        role="RESISTANCE",
+        break_buffer=0.2,
+        origin_event={"direction": "BULLISH"},
+    )
+
+    assert result["trigger_type"] == "NONE"
+    assert result["status"] == "NONE"
+
+
+def test_unified_analyzer_preserves_active_retest_context_without_falling_back():
+    m = _module()
+    baseline = [candle(i, 10.0, 10.2, 9.8, 10.0) for i in range(20)]
+    bars = baseline + [candle(20, 10.3, 10.8, 10.25, 10.6)]
+
+    result = m.analyze_15m_trigger(
+        bars,
+        level=10.0,
+        role="RESISTANCE",
+        break_buffer=0.2,
+        origin_event={"candle_index": 19, "direction": "BULLISH"},
+    )
+
+    assert result["trigger_type"] == "NONE"
+    assert result["status"] == "NONE"
