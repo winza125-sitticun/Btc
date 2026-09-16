@@ -4,6 +4,7 @@ import sys
 import types
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -38,6 +39,44 @@ class ExternalHealthcheckTests(unittest.TestCase):
         self.assertIn("GEMINI=MISSING", buf.getvalue())
         self.assertIn("TELEGRAM=MISSING", buf.getvalue())
         self.assertIn("HEALTHCHECK=FAIL", buf.getvalue())
+
+    def test_default_model_is_gemini_3_6_flash(self):
+        buf = io.StringIO()
+        fake_client = Mock()
+        fake_client.models.generate_content.return_value = types.SimpleNamespace(text="OK")
+        fake_genai = types.SimpleNamespace(Client=Mock(return_value=fake_client))
+        fake_google = types.SimpleNamespace(genai=fake_genai)
+        env = {
+            "GEMINI_API_KEY": "gem-secret",
+            "TELEGRAM_BOT_TOKEN": "tg-secret",
+            "TELEGRAM_CHAT_ID": "12345",
+        }
+        get_side_effect = [
+            FakeResponse({"ok": True, "result": {"id": 1}}),
+            FakeResponse({"ok": True, "result": {"id": 12345}}),
+        ]
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.dict(sys.modules, {"google": fake_google}),
+            patch.object(external_healthcheck.requests, "get", side_effect=get_side_effect),
+            redirect_stdout(buf),
+        ):
+            code = external_healthcheck.main([])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            fake_client.models.generate_content.call_args.kwargs["model"],
+            "gemini-3.6-flash",
+        )
+
+    def test_scanner_default_model_is_gemini_3_6_flash(self):
+        scanner_part = Path(__file__).resolve().parents[1] / "auto_scanner_v6.part00"
+        source = scanner_part.read_text(encoding="utf-8")
+        self.assertIn(
+            'GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()',
+            source,
+        )
+        self.assertNotIn("gemini-2.5-flash", source)
 
     def test_success_checks_gemini_bot_and_chat_without_sending(self):
         buf = io.StringIO()
