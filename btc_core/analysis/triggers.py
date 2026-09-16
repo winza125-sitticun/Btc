@@ -2,12 +2,13 @@
 
 All functions are analysis-only, operate on already-closed candles, perform no
 I/O, and expose no order-placement capability. The module accepts either
-``btc_core.market.models.Candle`` instances or candle-like mappings to keep
-replay fixtures deterministic and lightweight.
+``btc_core.market.models.Candle`` instances or candle-like mappings so replay
+fixtures remain deterministic and lightweight.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -21,6 +22,19 @@ def _field(candle: CandleLike, name: str) -> Any:
     return getattr(candle, name, None)
 
 
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _nonnegative_float(value: Any) -> float | None:
+    parsed = _finite_float(value)
+    return parsed if parsed is not None and parsed >= 0 else None
+
+
 def _valid_candle(candle: CandleLike) -> bool:
     if candle is None:
         return False
@@ -29,23 +43,15 @@ def _valid_candle(candle: CandleLike) -> bool:
     if any(_field(candle, key) is None for key in required):
         return False
 
-    try:
-        open_ = float(_field(candle, "open"))
-        high = float(_field(candle, "high"))
-        low = float(_field(candle, "low"))
-        close = float(_field(candle, "close"))
-    except (TypeError, ValueError):
+    open_ = _finite_float(_field(candle, "open"))
+    high = _finite_float(_field(candle, "high"))
+    low = _finite_float(_field(candle, "low"))
+    close = _finite_float(_field(candle, "close"))
+    if None in (open_, high, low, close):
         return False
 
+    assert open_ is not None and high is not None and low is not None and close is not None
     return high >= max(open_, close, low) and low <= min(open_, close, high)
-
-
-def _as_nonnegative(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed >= 0 else None
 
 
 def _resolve_index(bars: list[CandleLike], event_index: int | None) -> int | None:
@@ -79,6 +85,42 @@ def _event_payload(
     }
 
 
+def _none_result(level: Any) -> dict[str, Any]:
+    parsed_level = _finite_float(level)
+    return {
+        "trigger_type": "NONE",
+        "direction": None,
+        "status": "NONE",
+        "level": parsed_level if parsed_level is not None else level,
+        "candle_index": None,
+        "candle_time": None,
+        "volume_confirmed": False,
+        "evidence": {},
+    }
+
+
+def _finalize_event(
+    event: dict[str, Any], *, level: float, volume_confirmed: bool
+) -> dict[str, Any]:
+    trigger_type = str(event["event"])
+    actionable = trigger_type in {
+        "BREAKOUT_CONFIRMED",
+        "BREAKDOWN_CONFIRMED",
+        "RECLAIM_CONFIRMED",
+        "RETEST_CONFIRMED",
+    }
+    return {
+        "trigger_type": trigger_type,
+        "direction": event.get("direction"),
+        "status": event.get("status", "CLOSED_CONFIRMED"),
+        "level": level,
+        "candle_index": event.get("candle_index"),
+        "candle_time": event.get("candle_time"),
+        "volume_confirmed": volume_confirmed,
+        "evidence": {"actionable": actionable, "event": trigger_type},
+    }
+
+
 def detect_breakout(
     candles: Iterable[CandleLike],
     *,
@@ -91,18 +133,21 @@ def detect_breakout(
 
     bars = list(candles) if candles is not None else []
     index = _resolve_index(bars, event_index)
-    buffer_value = _as_nonnegative(break_buffer)
-    try:
-        level_value = float(level)
-    except (TypeError, ValueError):
+    level_value = _finite_float(level)
+    buffer_value = _nonnegative_float(break_buffer)
+    if (
+        index is None
+        or level_value is None
+        or buffer_value is None
+        or not _valid_candle(bars[index])
+    ):
         return None
 
-    if index is None or buffer_value is None or not _valid_candle(bars[index]):
+    close = _finite_float(_field(bars[index], "close"))
+    if close is None:
         return None
 
     role_value = str(role).upper()
-    close = float(_field(bars[index], "close"))
-
     if role_value == "RESISTANCE" and close > level_value + buffer_value:
         return _event_payload(
             bars,
@@ -134,25 +179,24 @@ def detect_reclaim(
 
     bars = list(candles) if candles is not None else []
     index = _resolve_index(bars, event_index)
-    buffer_value = _as_nonnegative(reclaim_buffer)
-    try:
-        level_value = float(level)
-    except (TypeError, ValueError):
-        return None
-
+    level_value = _finite_float(level)
+    buffer_value = _nonnegative_float(reclaim_buffer)
     if (
         index is None
         or index < 1
+        or level_value is None
         or buffer_value is None
         or not _valid_candle(bars[index - 1])
         or not _valid_candle(bars[index])
     ):
         return None
 
-    prior_close = float(_field(bars[index - 1], "close"))
-    close = float(_field(bars[index], "close"))
-    direction_value = str(direction).upper()
+    prior_close = _finite_float(_field(bars[index - 1], "close"))
+    close = _finite_float(_field(bars[index], "close"))
+    if prior_close is None or close is None:
+        return None
 
+    direction_value = str(direction).upper()
     if (
         direction_value == "BULLISH"
         and prior_close < level_value
@@ -192,21 +236,24 @@ def detect_liquidity_sweep(
 
     bars = list(candles) if candles is not None else []
     index = _resolve_index(bars, event_index)
-    buffer_value = _as_nonnegative(sweep_buffer)
-    try:
-        level_value = float(level)
-    except (TypeError, ValueError):
+    level_value = _finite_float(level)
+    buffer_value = _nonnegative_float(sweep_buffer)
+    if (
+        index is None
+        or level_value is None
+        or buffer_value is None
+        or not _valid_candle(bars[index])
+    ):
         return None
 
-    if index is None or buffer_value is None or not _valid_candle(bars[index]):
+    high = _finite_float(_field(bars[index], "high"))
+    low = _finite_float(_field(bars[index], "low"))
+    close = _finite_float(_field(bars[index], "close"))
+    if None in (high, low, close):
         return None
 
-    candle = bars[index]
-    high = float(_field(candle, "high"))
-    low = float(_field(candle, "low"))
-    close = float(_field(candle, "close"))
+    assert high is not None and low is not None and close is not None
     role_value = str(role).upper()
-
     if role_value == "SUPPORT" and low < level_value - buffer_value and close >= level_value:
         return _event_payload(
             bars,
@@ -239,26 +286,26 @@ def detect_rejection(
 
     bars = list(candles) if candles is not None else []
     index = _resolve_index(bars, event_index)
-    ratio = _as_nonnegative(min_wick_body_ratio)
-    tolerance = _as_nonnegative(test_tolerance)
-    try:
-        level_value = float(level)
-    except (TypeError, ValueError):
-        return None
-
+    level_value = _finite_float(level)
+    ratio = _nonnegative_float(min_wick_body_ratio)
+    tolerance = _nonnegative_float(test_tolerance)
     if (
         index is None
+        or level_value is None
         or ratio is None
         or tolerance is None
         or not _valid_candle(bars[index])
     ):
         return None
 
-    candle = bars[index]
-    open_ = float(_field(candle, "open"))
-    high = float(_field(candle, "high"))
-    low = float(_field(candle, "low"))
-    close = float(_field(candle, "close"))
+    open_ = _finite_float(_field(bars[index], "open"))
+    high = _finite_float(_field(bars[index], "high"))
+    low = _finite_float(_field(bars[index], "low"))
+    close = _finite_float(_field(bars[index], "close"))
+    if None in (open_, high, low, close):
+        return None
+
+    assert open_ is not None and high is not None and low is not None and close is not None
     body = max(abs(close - open_), max((high - low) * 1e-9, 1e-12))
     lower_wick = max(0.0, min(open_, close) - low)
     upper_wick = max(0.0, high - max(open_, close))
@@ -306,13 +353,13 @@ def volume_is_confirmed(
     index = _resolve_index(bars, event_index)
     try:
         period_value = int(period)
-        multiplier_value = float(multiplier)
     except (TypeError, ValueError):
         return False
-
+    multiplier_value = _finite_float(multiplier)
     if (
         index is None
         or period_value <= 0
+        or multiplier_value is None
         or multiplier_value <= 0
         or index < period_value
         or not _valid_candle(bars[index])
@@ -323,16 +370,16 @@ def volume_is_confirmed(
     if len(baseline) != period_value or not all(_valid_candle(bar) for bar in baseline):
         return False
 
-    try:
-        baseline_volumes = [float(_field(bar, "volume")) for bar in baseline]
-        current_volume = float(_field(bars[index], "volume"))
-    except (TypeError, ValueError):
+    baseline_volumes = [_finite_float(_field(bar, "volume")) for bar in baseline]
+    current_volume = _finite_float(_field(bars[index], "volume"))
+    if current_volume is None or any(volume is None for volume in baseline_volumes):
         return False
 
-    if current_volume < 0 or any(volume < 0 for volume in baseline_volumes):
+    volumes = [float(volume) for volume in baseline_volumes if volume is not None]
+    if current_volume < 0 or any(volume < 0 for volume in volumes):
         return False
 
-    average = sum(baseline_volumes) / period_value
+    average = sum(volumes) / period_value
     if average <= 0:
         return False
     return current_volume >= average * multiplier_value
@@ -354,10 +401,10 @@ def evaluate_retest(
 
     bars = list(candles) if candles is not None else []
     index = _resolve_index(bars, event_index)
-    break_value = _as_nonnegative(break_buffer)
-    tolerance = _as_nonnegative(test_tolerance)
+    level_value = _finite_float(level)
+    break_value = _nonnegative_float(break_buffer)
+    tolerance = _nonnegative_float(test_tolerance)
     try:
-        level_value = float(level)
         origin = int(origin_index)
         min_window = int(min_bars)
         max_window = int(max_bars)
@@ -366,6 +413,7 @@ def evaluate_retest(
 
     if (
         index is None
+        or level_value is None
         or break_value is None
         or tolerance is None
         or origin < 0
@@ -380,12 +428,14 @@ def evaluate_retest(
     if bars_since_origin < min_window or bars_since_origin > max_window:
         return None
 
-    candle = bars[index]
-    high = float(_field(candle, "high"))
-    low = float(_field(candle, "low"))
-    close = float(_field(candle, "close"))
-    direction_value = str(direction).upper()
+    high = _finite_float(_field(bars[index], "high"))
+    low = _finite_float(_field(bars[index], "low"))
+    close = _finite_float(_field(bars[index], "close"))
+    if None in (high, low, close):
+        return None
 
+    assert high is not None and low is not None and close is not None
+    direction_value = str(direction).upper()
     if direction_value == "BULLISH":
         if close < level_value - break_value:
             return _event_payload(
@@ -427,23 +477,6 @@ def evaluate_retest(
     return None
 
 
-def _none_result(level: Any) -> dict[str, Any]:
-    try:
-        level_value = float(level)
-    except (TypeError, ValueError):
-        level_value = level
-    return {
-        "trigger_type": "NONE",
-        "direction": None,
-        "status": "NONE",
-        "level": level_value,
-        "candle_index": None,
-        "candle_time": None,
-        "volume_confirmed": False,
-        "evidence": {},
-    }
-
-
 def analyze_15m_trigger(
     candles: Iterable[CandleLike],
     *,
@@ -462,22 +495,22 @@ def analyze_15m_trigger(
 ) -> dict[str, Any]:
     """Return one bounded deterministic trigger result for the latest candle.
 
-    Priority is causal retest, close-confirmed breakout/breakdown, reclaim,
-    liquidity sweep, then rejection. Sweeps/rejections are evidence-only and
-    therefore explicitly marked non-actionable.
+    When ``origin_event`` is supplied, the analyzer is locked to that active
+    retest thesis. It will return only a retest confirmation/invalidation or
+    ``NONE``. Malformed origin context fails closed instead of falling through
+    to an unrelated new breakout/reclaim signal.
     """
 
     bars = list(candles) if candles is not None else []
-    try:
-        level_value = float(level)
-    except (TypeError, ValueError):
-        return _none_result(level)
-
+    level_value = _finite_float(level)
     role_value = str(role).upper()
-    if not bars or role_value not in {"SUPPORT", "RESISTANCE"}:
-        return _none_result(level_value)
-    if not all(_valid_candle(bar) for bar in bars):
-        return _none_result(level_value)
+    if (
+        level_value is None
+        or not bars
+        or role_value not in {"SUPPORT", "RESISTANCE"}
+        or not all(_valid_candle(bar) for bar in bars)
+    ):
+        return _none_result(level)
 
     index = len(bars) - 1
     volume_confirmed = volume_is_confirmed(
@@ -487,36 +520,41 @@ def analyze_15m_trigger(
         event_index=index,
     )
 
-    event: dict[str, Any] | None = None
     if origin_event is not None:
+        if not isinstance(origin_event, Mapping):
+            return _none_result(level_value)
         try:
             origin_index = int(origin_event["candle_index"])
             origin_direction = str(origin_event["direction"]).upper()
         except (KeyError, TypeError, ValueError):
-            origin_index = -1
-            origin_direction = ""
-        if origin_direction in {"BULLISH", "BEARISH"}:
-            event = evaluate_retest(
-                bars,
-                level=level_value,
-                direction=origin_direction,
-                origin_index=origin_index,
-                min_bars=retest_min_bars,
-                max_bars=retest_max_bars,
-                break_buffer=break_buffer,
-                test_tolerance=test_tolerance,
-                event_index=index,
-            )
+            return _none_result(level_value)
+        if origin_direction not in {"BULLISH", "BEARISH"}:
+            return _none_result(level_value)
 
-    if event is None:
-        event = detect_breakout(
+        event = evaluate_retest(
             bars,
             level=level_value,
-            role=role_value,
+            direction=origin_direction,
+            origin_index=origin_index,
+            min_bars=retest_min_bars,
+            max_bars=retest_max_bars,
             break_buffer=break_buffer,
+            test_tolerance=test_tolerance,
             event_index=index,
         )
+        if event is None:
+            return _none_result(level_value)
+        return _finalize_event(
+            event, level=level_value, volume_confirmed=volume_confirmed
+        )
 
+    event = detect_breakout(
+        bars,
+        level=level_value,
+        role=role_value,
+        break_buffer=break_buffer,
+        event_index=index,
+    )
     if event is None:
         reclaim_direction = "BULLISH" if role_value == "SUPPORT" else "BEARISH"
         event = detect_reclaim(
@@ -526,7 +564,6 @@ def analyze_15m_trigger(
             reclaim_buffer=reclaim_buffer,
             event_index=index,
         )
-
     if event is None:
         event = detect_liquidity_sweep(
             bars,
@@ -535,7 +572,6 @@ def analyze_15m_trigger(
             sweep_buffer=sweep_buffer,
             event_index=index,
         )
-
     if event is None:
         event = detect_rejection(
             bars,
@@ -545,28 +581,9 @@ def analyze_15m_trigger(
             test_tolerance=test_tolerance,
             event_index=index,
         )
-
     if event is None:
         return _none_result(level_value)
 
-    trigger_type = str(event["event"])
-    actionable = trigger_type in {
-        "BREAKOUT_CONFIRMED",
-        "BREAKDOWN_CONFIRMED",
-        "RECLAIM_CONFIRMED",
-        "RETEST_CONFIRMED",
-    }
-
-    return {
-        "trigger_type": trigger_type,
-        "direction": event.get("direction"),
-        "status": event.get("status", "CLOSED_CONFIRMED"),
-        "level": level_value,
-        "candle_index": event.get("candle_index"),
-        "candle_time": event.get("candle_time"),
-        "volume_confirmed": volume_confirmed,
-        "evidence": {
-            "actionable": actionable,
-            "event": trigger_type,
-        },
-    }
+    return _finalize_event(
+        event, level=level_value, volume_confirmed=volume_confirmed
+    )
