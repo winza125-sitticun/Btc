@@ -59,7 +59,7 @@ Telegram
 
 When `REZ_ANALYSIS_ENABLED=false`, the current V6 flow must remain behaviorally unchanged.
 
-When enabled in `HYBRID` mode, REZ V1 acts as a deterministic context/timing gate but does not alter the existing Setup Score formula.
+When enabled, REZ V1 runs in the approved HYBRID behavior: deterministic context/timing gate first, unchanged V6 Setup Score second.
 
 ## 3. Inputs and Data Discipline
 
@@ -98,20 +98,20 @@ V1 reuses the existing confirmed-swing concept and current structure settings:
 
 - swing window: `STRUCTURE_SWING_WINDOW`
 - ATR period: `STRUCTURE_ATR_PERIOD`
-- confirmation buffer: `STRUCTURE_ATR_BUFFER_MULT * ATR`
+- 1H confirmation buffer: `STRUCTURE_ATR_BUFFER_MULT * ATR(1H)`
 
 ### 4.1 Confirmed BOS
 
 For a LONG-side context:
 
 ```text
-1H close > last confirmed swing high + ATR buffer
+1H close > last confirmed swing high + 1H ATR buffer
 ```
 
 For a SHORT-side context:
 
 ```text
-1H close < last confirmed swing low - ATR buffer
+1H close < last confirmed swing low - 1H ATR buffer
 ```
 
 A wick-only breach is not a BOS.
@@ -123,7 +123,7 @@ After a directional BOS, the most recent confirmed opposite swing becomes the pr
 - LONG protected swing: last confirmed swing low
 - SHORT protected swing: last confirmed swing high
 
-A closed 1H candle beyond the protected swing plus the same ATR buffer invalidates that structure leg.
+A closed 1H candle beyond the protected swing plus the same 1H ATR buffer invalidates that structure leg.
 
 ### 4.3 Classification rules
 
@@ -138,7 +138,7 @@ A closed 1H candle beyond the protected swing plus the same ATR buffer invalidat
 - current price has retraced back toward the breakout / swing zone but has not closed through invalidation
 
 `REVERSAL`
-- the prior structure is invalidated by a closed 1H candle beyond its protected swing plus ATR buffer
+- the prior structure is invalidated by a closed 1H candle beyond its protected swing plus 1H ATR buffer
 - a new confirmed BOS then forms in the same direction as the current V6 side
 - a single CHoCH or wick is insufficient
 
@@ -165,41 +165,91 @@ REJECTION
 NO_TRIGGER
 ```
 
-The trigger reference level comes from the active 1H structure anchor / breakout zone. The zone width is the existing ATR buffer projected around that level.
+V1 uses:
 
-### 5.1 BREAKOUT
+- ATR period: `STRUCTURE_ATR_PERIOD`
+- 15m confirmation buffer: `STRUCTURE_ATR_BUFFER_MULT * ATR(15m)`
+
+This reuses the same configuration values as V6 but calculates ATR on the trigger timeframe itself.
+
+### 5.1 Trigger reference level
+
+The trigger level is deterministic:
+
+- `CONTINUATION`: the most recent same-side 1H BOS level
+- `PULLBACK`: the most recent same-side 1H BOS level being retested
+- `REVERSAL`: the newly confirmed same-side 1H BOS level
+- `RANGE`: the nearest confirmed 1H range boundary relevant to the current V6 side; RANGE can only produce `WAIT` in V1
+
+The trigger zone is `trigger_level ± 15m ATR buffer`.
+
+### 5.2 BREAKOUT
 
 For LONG:
 
 ```text
-closed 15m close > trigger level + ATR buffer
+closed 15m close > trigger level + 15m ATR buffer
 ```
 
 For SHORT:
 
 ```text
-closed 15m close < trigger level - ATR buffer
+closed 15m close < trigger level - 15m ATR buffer
 ```
 
-### 5.2 RETEST
+### 5.3 RETEST
 
-A prior same-side 15m breakout must already be confirmed. A later closed 15m candle must revisit the trigger zone and close back on the valid side of the trigger level.
+A prior same-side 15m breakout must already be confirmed. A later closed 15m candle must trade into the trigger zone and close back on the valid side of the trigger level.
 
-### 5.3 RECLAIM
+### 5.4 RECLAIM
 
 Price trades through the trigger level, then a later closed 15m candle closes back on the valid side of that level. Reclaim is valid only if the 1H protected swing is still intact.
 
-### 5.4 LIQUIDITY_SWEEP
+### 5.5 LIQUIDITY_SWEEP
 
-The 15m wick breaches a confirmed local swing against the intended side, but the same candle closes back inside the valid structure side. A wick-only breach that closes outside is not a valid sweep.
+Use the latest confirmed 15m local swing against the intended side, found with `STRUCTURE_SWING_WINDOW`.
 
-### 5.5 REJECTION
+- LONG: wick breaches the latest confirmed 15m swing low, then the same candle closes back above that swing level
+- SHORT: wick breaches the latest confirmed 15m swing high, then the same candle closes back below that swing level
 
-A closed 15m candle trades into the trigger zone and closes away from the zone in the intended direction. The rejection wick on the zone-facing side must be at least as large as the candle body. Zero-body candles are not sufficient by themselves.
+A sweep is a supporting trigger tag in V1. `LIQUIDITY_SWEEP` alone never changes the Analysis state to PASS. It must accompany a valid `REJECTION`, `RECLAIM`, or `RETEST` condition allowed by the decision matrix.
 
-### 5.6 NO_TRIGGER
+### 5.6 REJECTION
+
+A closed 15m candle must trade into the trigger zone and close back on the valid side of the trigger level.
+
+For LONG:
+
+```text
+lower_wick = min(open, close) - low
+body       = abs(close - open)
+lower_wick >= body
+close > trigger_level
+```
+
+For SHORT:
+
+```text
+upper_wick = high - max(open, close)
+body       = abs(close - open)
+upper_wick >= body
+close < trigger_level
+```
+
+A zero-body candle is not sufficient by itself.
+
+### 5.7 NO_TRIGGER
 
 None of the deterministic trigger conditions above are confirmed on closed candles.
+
+### 5.8 Explicit opposite-side trigger
+
+An opposite-side trigger is present when a closed 15m candle confirms a breakout against the V6 side beyond the latest confirmed 15m opposite swing by the 15m ATR buffer.
+
+- LONG candidate: close below confirmed 15m swing low minus buffer
+- SHORT candidate: close above confirmed 15m swing high plus buffer
+
+This produces `REJECT`.
 
 ## 6. Hybrid Decision Matrix
 
@@ -227,6 +277,8 @@ Explicit opposite-side trigger                  -> REJECT
 1H protected structure invalidated              -> REJECT
 UNKNOWN / insufficient required candle data     -> REJECT
 ```
+
+`LIQUIDITY_SWEEP` may strengthen the context as a supporting tag but does not override the matrix.
 
 `WAIT` is a first-class state, not a failure. It is re-evaluated on later scan cycles.
 
@@ -309,6 +361,7 @@ Append-only audit events:
 ```text
 id
 watch_id
+shadow_snapshot_id NULL
 created_at_ms
 structure_1h
 trigger_15m
@@ -319,9 +372,13 @@ closed_1h_at_ms
 closed_15m_at_ms
 ```
 
-The existing V6 Shadow snapshot remains the source for score, Astra verdict, alert state, MFE/MAE, TP/SL outcome, and R-multiple evaluation.
+Rules:
 
-Where practical, the snapshot should store the REZ watch/event identifier or a compact REZ metadata object without changing existing outcome semantics.
+- `WAIT_ANALYSIS` events may exist without a Shadow snapshot because score calculation has not run yet
+- after `PASS`, if the existing V6 path creates a Shadow snapshot, the corresponding REZ event is updated once with that `shadow_snapshot_id`
+- existing Shadow snapshot tables do not require new columns for REZ V1
+
+The existing V6 Shadow snapshot remains the source for score, Astra verdict, alert state, MFE/MAE, TP/SL outcome, and R-multiple evaluation.
 
 ## 9. Setup Score Integration
 
@@ -353,6 +410,7 @@ Add the following deterministic metadata to the Astra prompt:
 - `analysis_version`
 - `structure_1h`
 - `trigger_15m`
+- supporting trigger tags such as `LIQUIDITY_SWEEP`
 - `analysis_reason`
 
 Astra may return only the existing outcomes:
@@ -394,14 +452,13 @@ New configuration:
 
 ```text
 REZ_ANALYSIS_ENABLED=false
-REZ_ANALYSIS_MODE=HYBRID
 REZ_ANALYSIS_VERSION=REZ_V1
 REZ_WATCH_TTL_HOURS=12
 ```
 
 V1 intentionally reuses the existing swing and ATR configuration instead of introducing additional sensitivity knobs.
 
-Rollout rule: deploy code with `REZ_ANALYSIS_ENABLED=false`, verify V6 regression behavior, then enable `HYBRID` after verification.
+Rollout rule: deploy code with `REZ_ANALYSIS_ENABLED=false`, verify V6 regression behavior, then enable the approved HYBRID behavior after verification.
 
 ## 13. Failure Handling
 
@@ -481,36 +538,38 @@ Implementation follows TDD.
 
 Required deterministic coverage:
 
-1. confirmed LONG and SHORT BOS require close plus ATR buffer
+1. confirmed LONG and SHORT BOS require close plus 1H ATR buffer
 2. wick-only BOS is rejected
 3. continuation classification
 4. pullback classification while protected swing remains intact
 5. reversal requires invalidation plus new confirmed BOS
 6. range classification
 7. unknown/missing data fails closed
-8. breakout trigger on closed 15m candle
+8. breakout uses 15m ATR buffer and a closed 15m candle
 9. retest requires prior breakout
 10. reclaim requires close back onto valid side
-11. liquidity sweep requires wick breach plus close back inside
-12. rejection wick/body rule
-13. no unfinished candle can confirm a trigger
-14. Hybrid PASS matrix
-15. Hybrid WAIT matrix
-16. opposite trigger rejects
-17. watch-key duplicate protection
-18. unchanged closed 15m timestamp does not create duplicate event
-19. WAIT can promote to PASS
-20. protected-structure break invalidates a watch
-21. 12-hour expiry
-22. disabled flag preserves existing V6 behavior
-23. REZ WAIT does not call Astra
-24. REZ PASS with score <75 does not call Astra
-25. REZ PASS with score >=75 can call Astra
-26. AI failure remains fail-closed
-27. existing score weights remain unchanged
-28. existing Shadow outcome evaluation remains unchanged
-29. Telegram is not sent for WAIT/REJECT states
-30. existing scanner tests remain green
+11. liquidity sweep requires confirmed 15m swing wick breach plus close back inside
+12. liquidity sweep alone cannot PASS
+13. rejection wick/body rule
+14. no unfinished candle can confirm a trigger
+15. explicit opposite-side trigger rejects
+16. Hybrid PASS matrix
+17. Hybrid WAIT matrix
+18. watch-key duplicate protection
+19. unchanged closed 15m timestamp does not create duplicate event
+20. WAIT can promote to PASS
+21. protected-structure break invalidates a watch
+22. 12-hour expiry
+23. disabled flag preserves existing V6 behavior
+24. REZ WAIT does not call Astra
+25. REZ PASS with score <75 does not call Astra
+26. REZ PASS with score >=75 can call Astra
+27. AI failure remains fail-closed
+28. existing score weights remain unchanged
+29. existing Shadow outcome evaluation remains unchanged
+30. REZ event links to Shadow snapshot after PASS without changing Shadow schema
+31. Telegram is not sent for WAIT/REJECT states
+32. existing scanner tests remain green
 
 External market and AI calls are mocked in unit tests.
 
@@ -520,7 +579,6 @@ External market and AI calls are mocked in unit tests.
 
 ```text
 REZ_ANALYSIS_ENABLED=false
-REZ_ANALYSIS_MODE=HYBRID
 ```
 
 Verify build, tests, scanner cadence, 80-symbol universe, provider lock, volume mount, Gemini health, Telegram health, and unchanged V6 decisions.
@@ -568,7 +626,7 @@ REZ Analysis Layer V1 does not include:
 REZ V1 succeeds when:
 
 1. disabling REZ leaves V6 behavior unchanged
-2. enabled HYBRID mode deterministically classifies 1H structure and 15m trigger from closed provider candles
+2. enabled HYBRID behavior deterministically classifies 1H structure and 15m trigger from closed provider candles
 3. WAIT setups persist and can promote to PASS without duplicate watches
 4. invalidated and expired watches stop re-evaluating
 5. REZ does not alter the existing Setup Score formula or threshold
