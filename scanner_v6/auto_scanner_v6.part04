@@ -59,6 +59,7 @@
             item["symbol"], item["side"], p["entry"], item["r4"], item["r1"], item["r15"],
             item["rsi"] if item["rsi"] is not None else 50.0,
             item["adx"], item["funding"], btc_bias, item["tags"], item["plan"], item["setup_score"],
+            rez_result=item.get("rez_result"),
         )
         print(f"     -> Astra Confidence: {ai_res.get('confidence', 0)}% | Verdict: {ai_res.get('verdict', 'REJECT')}")
 
@@ -91,6 +92,17 @@
         targets_text = "\n".join(target_lines)
         score = item["setup_score"]
         comp = score["components"]
+        rez_context_text = ""
+        item_rez = item.get("rez_result")
+        if item_rez is not None:
+            trigger_parts = [str(item_rez.trigger_15m)]
+            trigger_parts.extend(sorted(str(value) for value in item_rez.supporting_triggers))
+            trigger_text = " + ".join(trigger_parts)
+            rez_context_text = (
+                f"📐 *1H Structure:* `{item_rez.structure_1h}`\n"
+                f"⚡ *15m Trigger:* `{trigger_text}`\n"
+                f"🧪 *Analysis:* `{item_rez.analysis_version}`\n"
+            )
         msg = (
             f"{icon} `#{item['symbol']}`\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
@@ -99,6 +111,7 @@
             f"Market `{comp['market']}/15` | Funding `{comp['funding']}/10` | Timing `{comp['timing']}/10`\n"
             f"🤖 *Astra:* `APPROVED` | *Confidence:* `{ai_res['confidence']}%`\n"
             f"✅ *Final Decision:* `{item['side']}`\n"
+            f"{rez_context_text}"
             f"💡 *เหตุผล:* {ai_res.get('reason', '')}\n"
             f"⚠️ *จุดเสี่ยง:* {ai_res.get('risk', '')}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
