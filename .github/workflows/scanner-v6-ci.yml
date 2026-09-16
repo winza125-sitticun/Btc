@@ -2,7 +2,7 @@ name: Scanner V6 CI
 
 on:
   push:
-    branches: ["feature/rez-analysis-v1-inline"]
+    branches: ["feature/rez-analysis-v1-inline", "deploy/v6-shadow"]
   pull_request:
     paths:
       - "scanner_v6/**"
