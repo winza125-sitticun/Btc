@@ -145,7 +145,106 @@
     return recent_signals
 
 
+import math as _math
+import statistics as _statistics
+
+
 _structure_trade_plan_core = build_structure_trade_plan
+
+
+def _calculate_structure_rr_for_telemetry(
+    side,
+    entry_price,
+    candles_1h,
+    candles_4h=None,
+    pivot_levels=None,
+    atr_period=14,
+    atr_buffer_mult=0.25,
+    swing_window=2,
+):
+    """Reproduce TP1 R:R geometry for observation only; never decides pass/fail."""
+    try:
+        side = str(side).upper()
+        entry_price = float(entry_price)
+        if side not in {"LONG", "SHORT"} or entry_price <= 0 or atr_buffer_mult < 0:
+            return None
+
+        candles_4h = candles_4h or []
+        pivot_levels = pivot_levels or []
+        atr = calculate_atr(candles_1h, period=atr_period)
+        if atr is None or atr <= 0:
+            return None
+
+        swings_1h = find_confirmed_swings(candles_1h, window=swing_window)
+        swings_4h = (
+            find_confirmed_swings(candles_4h, window=swing_window)
+            if candles_4h else {"highs": [], "lows": []}
+        )
+        buffer_dist = atr * atr_buffer_mult
+
+        if side == "LONG":
+            stop_candidates = [s for s in swings_1h["lows"] if s["price"] < entry_price]
+            if not stop_candidates:
+                return None
+            sl = stop_candidates[-1]["price"] - buffer_dist
+            if sl >= entry_price:
+                return None
+            target_levels = [s["price"] for s in swings_1h["highs"] if s["price"] > entry_price]
+            target_levels += [s["price"] for s in swings_4h["highs"] if s["price"] > entry_price]
+            target_levels += [float(v) for v in pivot_levels if v is not None and float(v) > entry_price]
+        else:
+            stop_candidates = [s for s in swings_1h["highs"] if s["price"] > entry_price]
+            if not stop_candidates:
+                return None
+            sl = stop_candidates[-1]["price"] + buffer_dist
+            if sl <= entry_price:
+                return None
+            target_levels = [s["price"] for s in swings_1h["lows"] if s["price"] < entry_price]
+            target_levels += [s["price"] for s in swings_4h["lows"] if s["price"] < entry_price]
+            target_levels += [float(v) for v in pivot_levels if v is not None and float(v) < entry_price]
+
+        risk_dist = abs(entry_price - sl)
+        if risk_dist <= 0:
+            return None
+
+        tolerance = max(entry_price * 0.0001, atr * 0.05)
+        targets = _dedupe_levels(target_levels, tolerance)
+        if side == "SHORT":
+            targets = list(reversed(targets))
+        if not targets:
+            return None
+        return abs(float(targets[0]) - entry_price) / risk_dist
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
+
+
+def _summarize_rr_distribution(rr_values, rejected_rr_values=None):
+    """Summarize observation-only TP1 R:R values without changing any gate."""
+    values = [
+        float(value)
+        for value in rr_values
+        if isinstance(value, (int, float)) and _math.isfinite(float(value)) and float(value) >= 0
+    ]
+    rejected = [
+        float(value)
+        for value in (rejected_rr_values or [])
+        if isinstance(value, (int, float)) and _math.isfinite(float(value)) and float(value) >= 0
+    ]
+    summary = {
+        "lt_1_00": sum(1 for value in values if value < 1.00),
+        "1_00_to_1_24": sum(1 for value in values if 1.00 <= value < 1.25),
+        "1_25_to_1_49": sum(1 for value in values if 1.25 <= value < 1.50),
+        "gte_1_50": sum(1 for value in values if value >= 1.50),
+        "avg": None,
+        "median": None,
+        "nearest_reject": None,
+    }
+    if values:
+        summary["avg"] = sum(values) / len(values)
+        summary["median"] = float(_statistics.median(values))
+    if rejected:
+        summary["nearest_reject"] = max(rejected)
+    return summary
 
 
 def _classify_structure_reject_reason(
@@ -246,18 +345,33 @@ def build_structure_trade_plan(
         atr_buffer_mult=atr_buffer_mult,
         swing_window=swing_window,
     )
-    if result is None and diagnostics is not None:
-        diagnostics["reason"] = _classify_structure_reject_reason(
-            side=side,
-            entry_price=entry_price,
-            candles_1h=candles_1h,
-            candles_4h=candles_4h,
-            pivot_levels=pivot_levels,
-            min_rr=min_rr,
-            atr_period=atr_period,
-            atr_buffer_mult=atr_buffer_mult,
-            swing_window=swing_window,
-        )
+    if diagnostics is not None:
+        if result is None:
+            diagnostics["reason"] = _classify_structure_reject_reason(
+                side=side,
+                entry_price=entry_price,
+                candles_1h=candles_1h,
+                candles_4h=candles_4h,
+                pivot_levels=pivot_levels,
+                min_rr=min_rr,
+                atr_period=atr_period,
+                atr_buffer_mult=atr_buffer_mult,
+                swing_window=swing_window,
+            )
+        rr_tp1 = result.get("rr_tp1") if isinstance(result, dict) else None
+        if not isinstance(rr_tp1, (int, float)):
+            rr_tp1 = _calculate_structure_rr_for_telemetry(
+                side=side,
+                entry_price=entry_price,
+                candles_1h=candles_1h,
+                candles_4h=candles_4h,
+                pivot_levels=pivot_levels,
+                atr_period=atr_period,
+                atr_buffer_mult=atr_buffer_mult,
+                swing_window=swing_window,
+            )
+        if isinstance(rr_tp1, (int, float)) and _math.isfinite(float(rr_tp1)) and float(rr_tp1) >= 0:
+            diagnostics["rr_tp1"] = float(rr_tp1)
     return result
 
 
@@ -281,6 +395,8 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
         "alerts_sent": 0,
     }
     structure_reject_counts = {}
+    rr_values = []
+    rejected_rr_values = []
     score_attempts = 0
     rez_wait_results = 0
     btc_basis_calls = 0
@@ -325,6 +441,12 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
             diagnostics = {}
             kwargs["diagnostics"] = diagnostics
         result = original_build_structure_trade_plan(*args, **kwargs)
+        rr_tp1 = diagnostics.get("rr_tp1")
+        if isinstance(rr_tp1, (int, float)) and _math.isfinite(float(rr_tp1)) and float(rr_tp1) >= 0:
+            rr_value = float(rr_tp1)
+            rr_values.append(rr_value)
+            if result is None:
+                rejected_rr_values.append(rr_value)
         if result:
             counters["structure_passed"] += 1
         else:
@@ -390,6 +512,22 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
             counters["rez_reject"] = max(
                 0,
                 counters["rez_entered"] - counters["rez_pass"] - counters["rez_wait"],
+            )
+
+        if rr_values:
+            rr_summary = _summarize_rr_distribution(rr_values, rejected_rr_values)
+            nearest_reject = (
+                "N/A" if rr_summary["nearest_reject"] is None else f"{rr_summary['nearest_reject']:.2f}"
+            )
+            print(
+                "[*] RR_DISTRIBUTION: "
+                f"lt_1_00={rr_summary['lt_1_00']} "
+                f"1_00_to_1_24={rr_summary['1_00_to_1_24']} "
+                f"1_25_to_1_49={rr_summary['1_25_to_1_49']} "
+                f"gte_1_50={rr_summary['gte_1_50']} "
+                f"avg={rr_summary['avg']:.2f} "
+                f"median={rr_summary['median']:.2f} "
+                f"nearest_reject={nearest_reject}"
             )
 
         if structure_reject_counts:
