@@ -294,6 +294,121 @@ def _summarize_target_rr_opportunities(target_rr_sets, min_rr=1.5):
     }
 
 
+def _required_entry_wait_atr(entry, sl, tp1, atr, min_rr=1.5):
+    """Return directional entry improvement, in ATR, needed to make fixed TP1 reach min R:R."""
+    try:
+        entry = float(entry)
+        sl = float(sl)
+        tp1 = float(tp1)
+        atr = float(atr)
+        min_rr = float(min_rr)
+    except (TypeError, ValueError):
+        return None
+    if not all(_math.isfinite(value) for value in (entry, sl, tp1, atr, min_rr)):
+        return None
+    if atr <= 0 or min_rr <= 0:
+        return None
+
+    if sl < entry < tp1:
+        direction = "LONG"
+    elif tp1 < entry < sl:
+        direction = "SHORT"
+    else:
+        return None
+
+    required_entry = (tp1 + min_rr * sl) / (1.0 + min_rr)
+    improvement = entry - required_entry if direction == "LONG" else required_entry - entry
+    if improvement <= 0:
+        return 0.0
+    return improvement / atr
+
+
+def _summarize_entry_wait_atr(wait_values):
+    """Summarize cumulative better-entry distance buckets without changing entry selection."""
+    values = [
+        float(value)
+        for value in (wait_values or [])
+        if isinstance(value, (int, float)) and _math.isfinite(float(value)) and float(value) >= 0
+    ]
+    return {
+        "samples": len(values),
+        "within_0_25_atr": sum(1 for value in values if value <= 0.25),
+        "within_0_50_atr": sum(1 for value in values if value <= 0.50),
+        "within_1_00_atr": sum(1 for value in values if value <= 1.00),
+        "over_1_00_atr": sum(1 for value in values if value > 1.00),
+        "median_wait_atr": float(_statistics.median(values)) if values else None,
+    }
+
+
+def _calculate_structure_entry_wait_atr_for_telemetry(
+    side,
+    entry_price,
+    candles_1h,
+    candles_4h=None,
+    pivot_levels=None,
+    min_rr=1.5,
+    atr_period=14,
+    atr_buffer_mult=0.25,
+    swing_window=2,
+):
+    """Reproduce fixed SL/TP1 geometry and measure better-entry distance; observation only."""
+    try:
+        side = str(side).upper()
+        entry_price = float(entry_price)
+        if side not in {"LONG", "SHORT"} or entry_price <= 0 or min_rr <= 0 or atr_buffer_mult < 0:
+            return None
+
+        candles_4h = candles_4h or []
+        pivot_levels = pivot_levels or []
+        atr = calculate_atr(candles_1h, period=atr_period)
+        if atr is None or atr <= 0:
+            return None
+
+        swings_1h = find_confirmed_swings(candles_1h, window=swing_window)
+        swings_4h = (
+            find_confirmed_swings(candles_4h, window=swing_window)
+            if candles_4h else {"highs": [], "lows": []}
+        )
+        buffer_dist = atr * atr_buffer_mult
+
+        if side == "LONG":
+            stop_candidates = [s for s in swings_1h["lows"] if s["price"] < entry_price]
+            if not stop_candidates:
+                return None
+            sl = stop_candidates[-1]["price"] - buffer_dist
+            if sl >= entry_price:
+                return None
+            target_levels = [s["price"] for s in swings_1h["highs"] if s["price"] > entry_price]
+            target_levels += [s["price"] for s in swings_4h["highs"] if s["price"] > entry_price]
+            target_levels += [float(v) for v in pivot_levels if v is not None and float(v) > entry_price]
+        else:
+            stop_candidates = [s for s in swings_1h["highs"] if s["price"] > entry_price]
+            if not stop_candidates:
+                return None
+            sl = stop_candidates[-1]["price"] + buffer_dist
+            if sl <= entry_price:
+                return None
+            target_levels = [s["price"] for s in swings_1h["lows"] if s["price"] < entry_price]
+            target_levels += [s["price"] for s in swings_4h["lows"] if s["price"] < entry_price]
+            target_levels += [float(v) for v in pivot_levels if v is not None and float(v) < entry_price]
+
+        tolerance = max(entry_price * 0.0001, atr * 0.05)
+        targets = _dedupe_levels(target_levels, tolerance)
+        if side == "SHORT":
+            targets = list(reversed(targets))
+        if not targets:
+            return None
+        return _required_entry_wait_atr(
+            entry=entry_price,
+            sl=sl,
+            tp1=float(targets[0]),
+            atr=atr,
+            min_rr=min_rr,
+        )
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
+
+
 def _classify_structure_reject_reason(
     side,
     entry_price,
@@ -426,6 +541,20 @@ def build_structure_trade_plan(
         if target_rrs:
             diagnostics["target_rrs"] = target_rrs
             diagnostics["rr_tp1"] = target_rrs[0]
+        if result is None and diagnostics.get("reason") == "RR_TOO_LOW":
+            entry_wait_atr = _calculate_structure_entry_wait_atr_for_telemetry(
+                side=side,
+                entry_price=entry_price,
+                candles_1h=candles_1h,
+                candles_4h=candles_4h,
+                pivot_levels=pivot_levels,
+                min_rr=min_rr,
+                atr_period=atr_period,
+                atr_buffer_mult=atr_buffer_mult,
+                swing_window=swing_window,
+            )
+            if isinstance(entry_wait_atr, (int, float)) and _math.isfinite(float(entry_wait_atr)) and float(entry_wait_atr) >= 0:
+                diagnostics["entry_wait_atr"] = float(entry_wait_atr)
     return result
 
 
@@ -452,6 +581,7 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
     rr_values = []
     rejected_rr_values = []
     target_rr_samples = []
+    entry_wait_atr_values = []
     score_attempts = 0
     rez_wait_results = 0
     btc_basis_calls = 0
@@ -517,6 +647,9 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
                     ]
                     if clean_target_rrs:
                         target_rr_samples.append(clean_target_rrs)
+                entry_wait_atr = diagnostics.get("entry_wait_atr")
+                if isinstance(entry_wait_atr, (int, float)) and _math.isfinite(float(entry_wait_atr)) and float(entry_wait_atr) >= 0:
+                    entry_wait_atr_values.append(float(entry_wait_atr))
         return result
 
     def counted_analyze_rez_candidate(*args, **kwargs):
@@ -604,6 +737,22 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
                 f"tp2_ge_1_50={target_summary['tp2_ge_1_50']} "
                 f"tp3_ge_1_50={target_summary['tp3_ge_1_50']} "
                 f"no_target_ge_1_50={target_summary['no_target_ge_1_50']}"
+            )
+
+        if entry_wait_atr_values:
+            entry_summary = _summarize_entry_wait_atr(entry_wait_atr_values)
+            median_wait = (
+                "N/A" if entry_summary["median_wait_atr"] is None
+                else f"{entry_summary['median_wait_atr']:.2f}_ATR"
+            )
+            print(
+                "[*] ENTRY_RR_1_50: "
+                f"samples={entry_summary['samples']} "
+                f"within_0_25_atr={entry_summary['within_0_25_atr']} "
+                f"within_0_50_atr={entry_summary['within_0_50_atr']} "
+                f"within_1_00_atr={entry_summary['within_1_00_atr']} "
+                f"over_1_00_atr={entry_summary['over_1_00_atr']} "
+                f"median_wait={median_wait}"
             )
 
         if structure_reject_counts:
