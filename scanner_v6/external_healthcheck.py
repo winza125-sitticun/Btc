@@ -69,7 +69,7 @@ def main(argv=None):
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip() or "gemini-3.6-flash"
     try:
         timeout = float(os.getenv("HTTP_TIMEOUT_SECONDS", "8"))
     except ValueError:
