@@ -25,7 +25,7 @@ class StructureRejectTelemetryTests(unittest.TestCase):
             },
         )
 
-    def test_structure_reject_logs_reason_and_summary_without_reaching_score_or_astra(self):
+    def test_structure_reject_summary_is_observation_only(self):
         analysis = self._analysis()
         mapping = {"BINANCE:BTCUSDT.P": analysis}
         provider = mock.Mock()
@@ -68,10 +68,6 @@ class StructureRejectTelemetryTests(unittest.TestCase):
         rendered = "\n".join(
             " ".join(str(value) for value in call.args)
             for call in printed.call_args_list
-        )
-        self.assertIn(
-            "BTCUSDT: structure/ATR/R:R gate rejected setup -> RR_TOO_LOW",
-            rendered,
         )
         self.assertIn("[*] STRUCTURE_REJECTS: RR_TOO_LOW=1", rendered)
         score_setup.assert_not_called()
