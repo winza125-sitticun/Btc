@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add the approved deterministic REZ Analysis Layer V1 to Scanner V6 as a HYBRID context/timing gate, preserving all existing V6 safety rules and keeping live/testnet order execution absent.
+**Goal:** Add the approved deterministic REZ Analysis Layer V1 to Scanner V6 as a HYBRID context/timing gate while preserving all V6 safety rules and keeping live/testnet order execution absent.
 
-**Architecture:** Add three focused modules: a pure deterministic analysis module, a SQLite watch-state module, and a REZ calibration/report module. Integrate REZ after the existing Structure Trade Plan and before the unchanged Setup Score. Persist `WAIT` watches in the same Shadow SQLite database without altering existing Shadow snapshot/outcome semantics, and call Astra only after REZ `PASS` plus Setup Score `>=75`.
+**Architecture:** Add three focused modules: deterministic analysis, persistent watch state, and REZ calibration reporting. Insert REZ after the existing Structure Trade Plan and before the unchanged Setup Score. Persist WAIT watches in the same Shadow SQLite database without changing existing Shadow snapshot/outcome semantics. Astra runs only after REZ PASS and Setup Score `>=75`.
 
 **Tech Stack:** Python 3.13 runtime, stdlib `unittest`, SQLite, existing `requests`, `tradingview-ta`, `google-genai`; no new dependency.
 
@@ -16,7 +16,7 @@
 - Enabled behavior is the approved HYBRID mode only.
 - `SETUP_MIN_SCORE=75` remains unchanged.
 - Existing minimum structure R:R remains unchanged.
-- Existing market-provider lock and provider fallback remain unchanged.
+- Existing market-provider lock/fallback remains unchanged.
 - REZ uses closed candles from the provider already locked for the scan cycle.
 - Never mix Binance and Bybit candles inside one candidate evaluation.
 - Astra remains Devil's Advocate only and cannot change LONG/SHORT direction.
@@ -27,7 +27,7 @@
 - Reuse `STRUCTURE_SWING_WINDOW`, `STRUCTURE_ATR_PERIOD`, and `STRUCTURE_ATR_BUFFER_MULT`.
 - `REZ_WATCH_TTL_HOURS=12` by default.
 - `REZ_ANALYSIS_VERSION=REZ_V1` by default.
-- Keep the Railway runtime universe at 80 symbols.
+- Keep Railway runtime universe at 80 symbols.
 - Tests use stdlib `unittest`; market, Telegram, and Gemini calls are mocked/faked.
 
 ---
@@ -35,7 +35,7 @@
 ## File Map
 
 **Create**
-- `scanner_v6/rez_analysis_v1.py` — pure 1H structure, 15m trigger, HYBRID decision logic.
+- `scanner_v6/rez_analysis_v1.py` — 1H structure, 15m trigger, HYBRID decision logic.
 - `scanner_v6/rez_watch_v1.py` — SQLite watch state and REZ analysis events.
 - `scanner_v6/rez_report_v1.py` — REZ calibration joins/metrics and CLI report.
 - `scanner_v6/tests/test_rez_analysis_v1.py`
@@ -67,9 +67,9 @@
 
 **Interfaces:**
 - Consumes candle dictionaries with `open_time`, `open`, `high`, `low`, `close`, `volume`, `close_time`.
-- Produces `RezAnalysisResult` and `analyze_rez_candidate(...)`.
+- Produces `RezAnalysisResult` and `analyze_rez_candidate`.
 
-Use this exact public result contract:
+Use this public contract:
 
 ```python
 from dataclasses import dataclass
@@ -81,7 +81,7 @@ class RezAnalysisResult:
     state: str
     structure_1h: str
     trigger_15m: str
-    supporting_triggers: tuple[str, ...]
+    supporting_triggers: tuple
     reason: str
     protected_swing_timestamp: Optional[int]
     protected_swing_price: Optional[float]
@@ -91,26 +91,13 @@ class RezAnalysisResult:
     closed_15m_at_ms: Optional[int]
 ```
 
-For `RANGE`, use the confirmed 1H range boundary chosen as the trigger reference for `protected_swing_timestamp`/`protected_swing_price`. It is only a stable watch anchor, not directional protected structure.
+For `RANGE`, use the confirmed 1H range boundary chosen as trigger reference for `protected_swing_timestamp` and `protected_swing_price`; it is only a stable watch anchor.
 
-- [ ] **Step 1: Write the first failing core test**
+- [ ] **Step 1: Write first failing core test**
 
 ```python
 import unittest
 from rez_analysis_v1 import analyze_rez_candidate
-
-
-def candle(ts, o, h, l, close, duration=3_600_000):
-    return {
-        "open_time": ts,
-        "open": float(o),
-        "high": float(h),
-        "low": float(l),
-        "close": float(close),
-        "volume": 1.0,
-        "close_time": ts + duration - 1,
-    }
-
 
 class RezAnalysisTests(unittest.TestCase):
     def test_missing_history_fails_closed(self):
@@ -136,7 +123,7 @@ python -m unittest tests.test_rez_analysis_v1 -v
 
 Expected: import failure because `rez_analysis_v1.py` does not exist.
 
-- [ ] **Step 3: Implement validation, ATR, and confirmed swings**
+- [ ] **Step 3: Implement candle validation, ATR, and confirmed swings**
 
 ```python
 def _valid_closed_candle(candle):
@@ -159,69 +146,72 @@ def calculate_atr(candles, period):
     if not all(_valid_closed_candle(c) for c in window):
         return None
     true_ranges = []
-    for i in range(1, len(window)):
-        current, previous = window[i], window[i - 1]
+    for index in range(1, len(window)):
+        current, previous = window[index], window[index - 1]
         high = float(current["high"])
         low = float(current["low"])
         prev_close = float(previous["close"])
         true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
     return sum(true_ranges) / period
-
-
-def find_confirmed_swings(candles, window):
-    if window < 1 or len(candles) < window * 2 + 1:
-        return {"highs": [], "lows": []}
-    if not all(_valid_closed_candle(c) for c in candles):
-        return {"highs": [], "lows": []}
-    highs, lows = [], []
-    for index in range(window, len(candles) - window):
-        current = candles[index]
-        neighbors = candles[index - window:index] + candles[index + 1:index + window + 1]
-        high = float(current["high"])
-        low = float(current["low"])
-        if all(high > float(row["high"]) for row in neighbors):
-            highs.append({"index": index, "price": high, "timestamp": int(current["close_time"])})
-        if all(low < float(row["low"]) for row in neighbors):
-            lows.append({"index": index, "price": low, "timestamp": int(current["close_time"])})
-    return {"highs": highs, "lows": lows}
 ```
 
-- [ ] **Step 4: Add explicit 1H classification tests**
+`find_confirmed_swings(candles, window)` must return `{"highs": [...], "lows": [...]}` where each swing contains `index`, `price`, and `timestamp=int(close_time)`. Edge candles are never confirmed swings.
 
-Add concrete fixtures for these six behaviors, each asserting both structure and state: same-side close-confirmed BOS with intact protected swing=`CONTINUATION`; retrace toward BOS without invalidation=`PULLBACK`; protected-swing invalidation followed by a new same-side BOS=`REVERSAL`; invalidation without new BOS is not reversal; overlapping/alternating swings=`RANGE`; insufficient swings=`UNKNOWN/REJECT`.
+- [ ] **Step 4: Add concrete 1H classification tests**
 
-The wick-only case must include a candle whose `high` breaches the last swing high but whose `close` remains below `swing_high + ATR*buffer_mult`, and assert it is not `CONTINUATION`.
-
-- [ ] **Step 5: Implement 1H classifier**
+Use closed-candle fixtures for these exact assertions:
 
 ```python
-def _classify_1h_structure(*, side, candles, atr_period, atr_buffer_mult, swing_window):
-    atr = calculate_atr(candles, atr_period)
-    if atr is None or atr <= 0:
-        return {
-            "structure": "UNKNOWN", "protected_swing_timestamp": None,
-            "protected_swing_price": None, "trigger_level_kind": None,
-            "trigger_level_price": None, "closed_1h_at_ms": None,
-            "invalidated": False, "reason": "INVALID_1H_ATR",
-        }
-    swings = find_confirmed_swings(candles, swing_window)
-    if not swings["highs"] or not swings["lows"]:
-        return {
-            "structure": "UNKNOWN", "protected_swing_timestamp": None,
-            "protected_swing_price": None, "trigger_level_kind": None,
-            "trigger_level_price": None, "closed_1h_at_ms": int(candles[-1]["close_time"]),
-            "invalidated": False, "reason": "INSUFFICIENT_CONFIRMED_SWINGS",
-        }
-    # Continue with close-confirmed BOS and protected-swing rules from the approved spec.
+self.assertEqual(continuation.structure_1h, "CONTINUATION")
+self.assertEqual(pullback.structure_1h, "PULLBACK")
+self.assertEqual(reversal.structure_1h, "REVERSAL")
+self.assertNotEqual(invalidation_without_new_bos.structure_1h, "REVERSAL")
+self.assertEqual(ranging.structure_1h, "RANGE")
+self.assertEqual(insufficient.structure_1h, "UNKNOWN")
+self.assertEqual(insufficient.state, "REJECT")
+self.assertNotEqual(wick_only_break.structure_1h, "CONTINUATION")
 ```
 
-The implementation after this guard must use `buffer = atr * atr_buffer_mult`, chronological swing timestamps, and closed candle prices only. It must return one of the five approved structures and a deterministic trigger level.
+The wick-only fixture must breach a swing with `high`/`low` but keep close inside the ATR-buffer confirmation boundary.
 
-- [ ] **Step 6: Add explicit 15m trigger tests**
+- [ ] **Step 5: Implement 1H classifier with an explicit return schema**
 
-Create fixtures and assertions for: BREAKOUT requires close beyond `level ± ATR15m buffer`; RETEST requires a prior breakout plus later zone touch and valid-side close; RECLAIM requires trading through the level then closing back to the valid side; REJECTION requires zone touch, valid-side close, and zone-facing wick `>= body`; LIQUIDITY_SWEEP is only a supporting tag; explicit opposite breakout sets final state `REJECT`; no valid trigger returns `NO_TRIGGER` and `WAIT` for continuation/pullback.
+```python
+STRUCTURES = {"CONTINUATION", "PULLBACK", "REVERSAL", "RANGE", "UNKNOWN"}
 
-- [ ] **Step 7: Implement trigger classifier and literal HYBRID matrix**
+
+def _structure_result(structure, protected, trigger_kind, trigger_price, closed_at, invalidated, reason):
+    return {
+        "structure": structure,
+        "protected_swing_timestamp": None if protected is None else int(protected["timestamp"]),
+        "protected_swing_price": None if protected is None else float(protected["price"]),
+        "trigger_level_kind": trigger_kind,
+        "trigger_level_price": None if trigger_price is None else float(trigger_price),
+        "closed_1h_at_ms": closed_at,
+        "invalidated": bool(invalidated),
+        "reason": reason,
+    }
+```
+
+Algorithm order is fixed: validate ATR/swings; find latest chronological same-side BOS using close beyond swing plus `ATR1H*buffer_mult`; assign latest opposite confirmed swing before/at that BOS as protected swing; test protected-swing invalidation by a later 1H close beyond buffer; classify REVERSAL only if invalidation is followed by a new same-side BOS; otherwise classify CONTINUATION when latest same-side BOS is intact, PULLBACK when intact structure has retraced into the BOS zone, RANGE when no directional BOS is confirmed but usable boundaries exist, UNKNOWN when deterministic anchors are missing.
+
+- [ ] **Step 6: Add concrete 15m trigger tests**
+
+Assert these exact outcomes from closed fixtures:
+
+```python
+self.assertEqual(breakout.trigger_15m, "BREAKOUT")
+self.assertEqual(retest.trigger_15m, "RETEST")
+self.assertEqual(reclaim.trigger_15m, "RECLAIM")
+self.assertEqual(rejection.trigger_15m, "REJECTION")
+self.assertIn("LIQUIDITY_SWEEP", sweep.supporting_triggers)
+self.assertNotEqual(sweep.trigger_15m, "LIQUIDITY_SWEEP")
+self.assertEqual(opposite_break.state, "REJECT")
+self.assertEqual(no_trigger.trigger_15m, "NO_TRIGGER")
+self.assertEqual(no_trigger.state, "WAIT")
+```
+
+- [ ] **Step 7: Implement literal HYBRID matrix and trigger rules**
 
 ```python
 PASS_MATRIX = {
@@ -243,7 +233,7 @@ def _hybrid_state(structure, trigger, opposite_trigger):
     return "WAIT", f"{structure}_NO_CONFIRMED_TRIGGER"
 ```
 
-`LIQUIDITY_SWEEP` may be added only to `supporting_triggers`; it cannot become the primary trigger that makes `_hybrid_state` return PASS.
+Trigger rules are exact: 15m BREAKOUT requires close beyond `trigger_level ± ATR15m*buffer_mult`; RETEST requires an earlier confirmed breakout then a later zone touch and valid-side close; RECLAIM requires trade through level then valid-side close; REJECTION requires zone touch, valid-side close, and zone-facing wick `>= abs(close-open)` with nonzero body; LIQUIDITY_SWEEP uses latest confirmed 15m opposite swing and is supporting-only; explicit opposite breakout beyond opposite confirmed 15m swing plus buffer sets `opposite_trigger=True`.
 
 - [ ] **Step 8: Implement public analyzer**
 
@@ -255,20 +245,22 @@ def analyze_rez_candidate(
     side = str(side).upper()
     if side not in {"LONG", "SHORT"} or atr_period <= 0 or atr_buffer_mult < 0 or swing_window < 1:
         return RezAnalysisResult(
-            analysis_version=analysis_version, state="REJECT", structure_1h="UNKNOWN",
-            trigger_15m="NO_TRIGGER", supporting_triggers=(), reason="INVALID_INPUT",
-            protected_swing_timestamp=None, protected_swing_price=None,
-            trigger_level_kind=None, trigger_level_price=None,
-            closed_1h_at_ms=None, closed_15m_at_ms=None,
+            analysis_version=analysis_version,
+            state="REJECT",
+            structure_1h="UNKNOWN",
+            trigger_15m="NO_TRIGGER",
+            supporting_triggers=(),
+            reason="INVALID_INPUT",
+            protected_swing_timestamp=None,
+            protected_swing_price=None,
+            trigger_level_kind=None,
+            trigger_level_price=None,
+            closed_1h_at_ms=None,
+            closed_15m_at_ms=None,
         )
-    structure = _classify_1h_structure(
-        side=side, candles=candles_1h, atr_period=atr_period,
-        atr_buffer_mult=atr_buffer_mult, swing_window=swing_window,
-    )
-    # Convert UNKNOWN to REJECT; otherwise classify 15m using the deterministic trigger level.
 ```
 
-Finish the function with the exact approved matrix and populate every dataclass field; do not return partial dictionaries.
+After input validation, call `_classify_1h_structure`; convert UNKNOWN to REJECT; otherwise require a deterministic trigger level, classify 15m, call `_hybrid_state`, then construct a fully populated `RezAnalysisResult` with no missing required metadata for WAIT/PASS watches.
 
 - [ ] **Step 9: Run GREEN**
 
@@ -276,8 +268,6 @@ Finish the function with the exact approved matrix and populate every dataclass 
 cd scanner_v6
 python -m unittest tests.test_rez_analysis_v1 -v
 ```
-
-Expected: all REZ analysis tests pass.
 
 - [ ] **Step 10: Commit**
 
@@ -298,8 +288,6 @@ git commit -m "feat(scanner-v6): add deterministic REZ analysis core"
 - Consumes `SHADOW_DB_PATH` and `RezAnalysisResult`.
 - Produces `RezWatchStore` and `RezRecordResult`.
 
-Use this exact record result:
-
 ```python
 @dataclass(frozen=True)
 class RezRecordResult:
@@ -311,14 +299,13 @@ class RezRecordResult:
     promoted: bool
 ```
 
-- [ ] **Step 1: Write failing schema/dedupe test**
+- [ ] **Step 1: Write failing schema test**
 
 ```python
 import tempfile
 import unittest
 from pathlib import Path
 from rez_watch_v1 import RezWatchStore
-
 
 class RezWatchStoreTests(unittest.TestCase):
     def setUp(self):
@@ -342,7 +329,7 @@ cd scanner_v6
 python -m unittest tests.test_rez_watch_v1 -v
 ```
 
-- [ ] **Step 3: Implement schema and watch key**
+- [ ] **Step 3: Implement schema and stable identity**
 
 ```python
 def build_watch_key(symbol, side, anchor_timestamp, trigger_level_kind, analysis_version):
@@ -355,44 +342,40 @@ def build_watch_key(symbol, side, anchor_timestamp, trigger_level_kind, analysis
     return f"{symbol}|{side}|{int(anchor_timestamp)}|{trigger_level_kind}|{analysis_version}"
 ```
 
-Create approved columns in `rez_watch_state` and `rez_analysis_events`, with `UNIQUE(watch_key)` and an event uniqueness constraint covering `(watch_id, closed_15m_at_ms, analysis_state, trigger_15m)` so the same closed candle/state cannot duplicate an event.
+Create all approved columns in `rez_watch_state` and `rez_analysis_events`. Add `UNIQUE(watch_key)` and event uniqueness on `(watch_id, closed_15m_at_ms, analysis_state, trigger_15m)`.
 
 - [ ] **Step 4: Add transition tests**
 
-Add concrete tests that record a WAIT event twice with the same closed 15m timestamp and assert the second returns `event_inserted=False`; record a newer 15m WAIT and assert a new event; record WAIT then PASS and assert `promoted=True`; record REJECT and assert `invalidated_at_ms` is set; advance `now_ms` beyond 12 hours and assert `expire_due()` changes only active WAIT watches to EXPIRED.
+Use real SQLite and assert: identical WAIT on identical closed 15m timestamp returns `event_inserted=False`; a newer closed 15m candle appends an event; WAIT then PASS returns `promoted=True`; REJECT sets `invalidated_at_ms`; `expire_due` changes only active WAIT rows past fixed 12-hour expiry.
 
-- [ ] **Step 5: Implement `record_analysis` and `expire_due`**
-
-```python
-def record_analysis(self, *, symbol, side, provider, result, now_ms, ttl_hours):
-    watch_key = build_watch_key(
-        symbol, side, result.protected_swing_timestamp,
-        result.trigger_level_kind, result.analysis_version,
-    )
-    current_state = {
-        "PASS": "ANALYSIS_PASS",
-        "WAIT": "ANALYSIS_WAIT",
-        "REJECT": "REJECT_ANALYSIS",
-    }[result.state]
-    # Read or create the watch, remember previous state, update timestamps/state,
-    # append one event if this closed 15m state is new, and return RezRecordResult.
-```
-
-The implementation must calculate `promoted = previous_state == "ANALYSIS_WAIT" and current_state == "ANALYSIS_PASS"`. `expires_at_ms` is fixed from `first_seen_at_ms + ttl_hours*3_600_000`, not extended on every scan.
-
-- [ ] **Step 6: Add and implement one-time Shadow snapshot link**
-
-Test that a PASS event with `shadow_snapshot_id=NULL` can be linked once, linking the same ID again is idempotent, and linking a different ID raises `ValueError`.
+- [ ] **Step 5: Implement state mapping and promotion result**
 
 ```python
-def link_event_snapshot(self, event_id, snapshot_id):
-    snapshot_id = str(snapshot_id).strip()
-    if not snapshot_id:
-        raise ValueError("empty shadow snapshot id")
-    # Read current value; set when NULL; accept same id; reject a different existing id.
+STATE_MAP = {
+    "PASS": "ANALYSIS_PASS",
+    "WAIT": "ANALYSIS_WAIT",
+    "REJECT": "REJECT_ANALYSIS",
+}
+
+
+def _is_promotion(previous_state, current_state):
+    return previous_state == "ANALYSIS_WAIT" and current_state == "ANALYSIS_PASS"
 ```
 
-Do not add columns to existing Shadow tables.
+`record_analysis` must: build key; fetch/create watch; preserve original `first_seen_at_ms`; compute fixed `expires_at_ms=first_seen_at_ms + ttl_hours*3_600_000`; update current metadata; insert one deduped event; set invalidation timestamp on REJECT; return all `RezRecordResult` fields including `promoted` from `_is_promotion`.
+
+- [ ] **Step 6: Implement one-time Shadow snapshot link with tests**
+
+```python
+def _validate_snapshot_link(current, requested):
+    if current is None:
+        return "SET"
+    if str(current) == str(requested):
+        return "NOOP"
+    raise ValueError("REZ event already linked to another Shadow snapshot")
+```
+
+`link_event_snapshot(event_id, snapshot_id)` must read current value, apply this rule, update only when action is `SET`, and raise on missing event or empty requested ID. Do not alter existing Shadow tables.
 
 - [ ] **Step 7: Run GREEN**
 
@@ -418,14 +401,13 @@ git commit -m "feat(scanner-v6): persist REZ watch states"
 
 **Interfaces:**
 - Consumes REZ events/watch rows plus existing Shadow snapshot/outcome rows via `shadow_snapshot_id`.
-- Produces `build_rez_report(rows)`, `generate_report(db_path)`, and CLI output.
+- Produces `build_rez_report(rows)`, `generate_report(db_path)`, text renderer, and CLI.
 
 - [ ] **Step 1: Write failing aggregation test**
 
 ```python
 import unittest
 from rez_report_v1 import build_rez_report
-
 
 class RezReportTests(unittest.TestCase):
     def test_report_groups_structure_trigger_and_conversion_rates(self):
@@ -450,8 +432,6 @@ python -m unittest tests.test_rez_report_v1 -v
 
 - [ ] **Step 3: Implement aggregation and database join**
 
-Use `statistics.mean` and `statistics.median`; zero denominators return `None`.
-
 ```sql
 SELECT e.*, w.symbol, w.side, w.analysis_version,
        s.score_total, s.astra_verdict,
@@ -463,28 +443,23 @@ LEFT JOIN setup_outcomes o ON o.snapshot_id = s.id
 ORDER BY e.created_at_ms ASC
 ```
 
-Report keys must include `wait_to_pass_rate_pct`, `pass_to_score_gate_rate_pct`, `pass_to_astra_approved_rate_pct`, `expiry_rate_pct`, `invalidation_rate_pct`, `by_structure`, `by_trigger`, average/median MFE R, and average/median MAE R.
+Use `statistics.mean` and `statistics.median`; zero denominators return `None`. Report keys must include WAIT-to-PASS, PASS-to-score-gate, PASS-to-Astra-approved, expiry, invalidation, structure/trigger breakdowns, TP/SL rates, average/median MFE R, and average/median MAE R.
 
-- [ ] **Step 4: Add CLI rendering test and implementation**
+- [ ] **Step 4: Add CLI test and implementation**
 
-Test that text contains `REZ V1 Calibration Report`, `WAIT->PASS`, structure and trigger headings, and `Automatic tuning: DISABLED`. CLI:
+Text must contain `REZ V1 Calibration Report`, `WAIT->PASS`, structure/trigger sections, and `Automatic tuning: DISABLED`. Support:
 
 ```bash
 python rez_report_v1.py --db shadow_eval_v6.sqlite3
 python rez_report_v1.py --db shadow_eval_v6.sqlite3 --json
 ```
 
-- [ ] **Step 5: Run GREEN**
+- [ ] **Step 5: Run GREEN and commit**
 
 ```bash
 cd scanner_v6
 python -m unittest tests.test_rez_report_v1 -v
-```
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add scanner_v6/rez_report_v1.py scanner_v6/tests/test_rez_report_v1.py
+git add rez_report_v1.py tests/test_rez_report_v1.py
 git commit -m "feat(scanner-v6): add REZ calibration reporting"
 ```
 
@@ -497,11 +472,11 @@ git commit -m "feat(scanner-v6): add REZ calibration reporting"
 - Create: `scanner_v6/tests/test_rez_scanner_integration.py`
 
 **Interfaces:**
-- Produces `REZ_ANALYSIS_ENABLED`, `REZ_ANALYSIS_VERSION`, `REZ_WATCH_TTL_HOURS`, and `get_rez_watch_store()`.
+- Produces `REZ_ANALYSIS_ENABLED`, `REZ_ANALYSIS_VERSION`, `REZ_WATCH_TTL_HOURS`, and `get_rez_watch_store`.
 
 - [ ] **Step 1: Write failing config/default test**
 
-Assemble generated files in `setUpClass`, import the scanner module with REZ env vars unset, and assert:
+After assembling generated files, import scanner with REZ env vars unset and assert:
 
 ```python
 self.assertFalse(scanner.REZ_ANALYSIS_ENABLED)
@@ -509,7 +484,7 @@ self.assertEqual(scanner.REZ_ANALYSIS_VERSION, "REZ_V1")
 self.assertEqual(scanner.REZ_WATCH_TTL_HOURS, 12)
 ```
 
-Also patch `RezWatchStore` and assert it is not constructed when `REZ_ANALYSIS_ENABLED` is false.
+Patch `RezWatchStore` and assert it is not constructed while REZ is disabled.
 
 - [ ] **Step 2: Run RED**
 
@@ -534,7 +509,7 @@ _REZ_WATCH_STORE = None
 _REZ_WATCH_STORE_FAILED = False
 ```
 
-Implement `get_rez_watch_store()` with the same sticky fail-closed pattern as `get_shadow_store()`, using `SHADOW_DB_PATH`. Do not initialize it unless REZ is enabled.
+`get_rez_watch_store` must follow the existing `get_shadow_store` sticky fail-closed pattern and use `SHADOW_DB_PATH`. The scanner must call it only when REZ is enabled.
 
 - [ ] **Step 4: Run GREEN and commit**
 
@@ -558,20 +533,21 @@ git commit -m "feat(scanner-v6): add REZ feature configuration"
 
 **Interfaces:**
 - Uses `RezAnalysisResult` and `RezRecordResult`.
-- Only REZ PASS reaches `score_setup(...)` when enabled.
+- Only REZ PASS reaches `score_setup` when enabled.
 
 - [ ] **Step 1: Add failing orchestration tests**
 
-Write concrete mocks asserting all six paths:
+Use mocks with these exact call assertions:
 
 ```python
-# WAIT: score_setup, analyze_with_ai, send_telegram_alert each assert_not_called().
-# REJECT: same three functions assert_not_called().
-# PASS + score 74: analyze_with_ai and send_telegram_alert assert_not_called().
-# PASS + score 75: analyze_with_ai assert_called_once().
-# REZ store initialization/write failure: candidate does not reach Astra.
-# REZ disabled: analyze_rez_candidate assert_not_called() and legacy score path remains reachable.
+score_setup.assert_not_called()          # REZ WAIT and REZ REJECT
+analyze_with_ai.assert_not_called()      # WAIT, REJECT, and PASS score 74
+send_telegram_alert.assert_not_called()  # WAIT, REJECT, and PASS score 74
+analyze_with_ai.assert_called_once()     # PASS score 75 or higher
+analyze_rez_candidate.assert_not_called()  # REZ disabled legacy path
 ```
+
+Also make a REZ-store failure test and assert candidate never reaches Astra.
 
 - [ ] **Step 2: Run RED**
 
@@ -583,8 +559,6 @@ python -m unittest tests.test_rez_scanner_integration -v
 ```
 
 - [ ] **Step 3: Invoke REZ after existing Structure Plan**
-
-In `part03`, only after `plan` is non-null:
 
 ```python
 rez_result = None
@@ -605,8 +579,11 @@ if REZ_ANALYSIS_ENABLED:
         analysis_version=REZ_ANALYSIS_VERSION,
     )
     rez_record = rez_store.record_analysis(
-        symbol=symbol, side=side, provider=provider_name,
-        result=rez_result, now_ms=int(time.time() * 1000),
+        symbol=symbol,
+        side=side,
+        provider=provider_name,
+        result=rez_result,
+        now_ms=int(time.time() * 1000),
         ttl_hours=REZ_WATCH_TTL_HOURS,
     )
     if rez_result.state == "WAIT":
@@ -621,13 +598,11 @@ When disabled, do not fetch REZ-specific 15m klines and do not initialize REZ pe
 
 - [ ] **Step 4: Add cycle counters and expiry**
 
-Initialize only for enabled mode:
-
 ```python
 rez_counts = {"pass": 0, "wait": 0, "reject": 0, "expired": 0, "promoted": 0}
 ```
 
-Call `rez_store.expire_due(now_ms)` once per scan cycle. Increment `promoted` only from `rez_record.promoted`. Print once:
+Call `expire_due(now_ms)` once per enabled scan. Increment `promoted` only from `rez_record.promoted`. Print once per enabled scan:
 
 ```text
 [*] REZ: pass=N wait=N reject=N expired=N promoted=N
@@ -642,14 +617,14 @@ Add to qualified item:
 "rez_event_id": None if rez_record is None else rez_record.event_id,
 ```
 
-Immediately after `shadow_store.record_snapshot(...)` returns `shadow_snapshot_id`, call:
+After `shadow_store.record_snapshot` returns:
 
 ```python
 if REZ_ANALYSIS_ENABLED and rez_record is not None:
     rez_store.link_event_snapshot(rez_record.event_id, shadow_snapshot_id)
 ```
 
-A link failure must stop that candidate before Astra/Telegram.
+Any link failure stops that candidate before Astra/Telegram.
 
 - [ ] **Step 6: Run GREEN and commit**
 
@@ -671,12 +646,11 @@ git commit -m "feat(scanner-v6): gate setups through REZ hybrid analysis"
 - Modify: `scanner_v6/auto_scanner_v6.part04`
 - Modify: `scanner_v6/tests/test_rez_scanner_integration.py`
 
-**Interfaces:**
-- `analyze_with_ai(..., rez_result: Optional[RezAnalysisResult] = None)`.
+**Interface:** `analyze_with_ai` gains optional `rez_result: Optional[RezAnalysisResult] = None`.
 
 - [ ] **Step 1: Write failing Astra prompt test**
 
-Patch Gemini client, capture `contents`, pass a `RezAnalysisResult` with `PULLBACK`, primary `RETEST`, supporting `LIQUIDITY_SWEEP`, and assert the prompt contains exactly:
+Capture Gemini `contents` and assert a PULLBACK/RETEST result with sweep tag contains exactly:
 
 ```text
 REZ Analysis: REZ_V1
@@ -685,20 +659,27 @@ REZ Analysis: REZ_V1
 Supporting Triggers: LIQUIDITY_SWEEP
 ```
 
-- [ ] **Step 2: Extend Astra signature and prompt**
+- [ ] **Step 2: Extend Astra input without changing output contract**
 
 ```python
-def analyze_with_ai(
-    symbol, side, price, r4, r1, r15, rsi, adx, funding, btc_trend,
-    tags, plan=None, setup_score=None, rez_result: Optional[RezAnalysisResult] = None,
-):
+def _rez_prompt_text(rez_result):
+    if rez_result is None:
+        return "REZ Analysis: DISABLED"
+    support = ",".join(sorted(rez_result.supporting_triggers)) or "NONE"
+    return (
+        f"REZ Analysis: {rez_result.analysis_version}\n"
+        f"1H Structure: {rez_result.structure_1h}\n"
+        f"15m Trigger: {rez_result.trigger_15m}\n"
+        f"Supporting Triggers: {support}\n"
+        f"REZ Reason: {rez_result.reason}"
+    )
 ```
 
-Build prompt text only from deterministic REZ fields; never send raw candle arrays. Keep existing output JSON contract unchanged: `confidence`, `verdict`, `reason`, `risk`.
+Append this compact text to the current Astra prompt; never send raw candles. Keep the existing response JSON contract: confidence, verdict, reason, risk.
 
 - [ ] **Step 3: Write failing Telegram-format test**
 
-Capture the final message and assert it contains, only when REZ metadata exists:
+Capture final message and assert enabled REZ adds:
 
 ```text
 📐 *1H Structure:* `PULLBACK`
@@ -706,11 +687,11 @@ Capture the final message and assert it contains, only when REZ metadata exists:
 🧪 *Analysis:* `REZ_V1`
 ```
 
-For REZ disabled, assert those three lines are absent while Entry, SL, TP, score, Astra, BTC bias, provider, and invalidation remain.
+Assert these lines are absent when REZ metadata is `None`, while existing Entry/SL/TP/score/Astra/BTC/provider/invalidation lines remain.
 
 - [ ] **Step 4: Implement final-output formatting**
 
-Use primary trigger first, then sorted supporting triggers. Do not send messages for `WAIT_ANALYSIS`, `REJECT_ANALYSIS`, `WAIT_SCORE`, or `WAIT_ASTRA`; those paths must never enter delivery.
+Primary trigger is first; supporting triggers are sorted and appended with ` + `. WAIT_ANALYSIS, REJECT_ANALYSIS, WAIT_SCORE, and WAIT_ASTRA must never enter final delivery.
 
 - [ ] **Step 5: Run GREEN and commit**
 
@@ -747,7 +728,7 @@ python -m py_compile \
 
 Expected: exit 0, no output.
 
-- [ ] **Step 3: Run full tests**
+- [ ] **Step 3: Run full test suite**
 
 ```bash
 python -m unittest discover -s tests -v
@@ -763,7 +744,7 @@ git diff 7331c56a88dffe87d21d6ba7bfddf1847c4dbcfe -- scanner_v6/setup_score_v6.p
 
 Expected: no diff.
 
-- [ ] **Step 5: Prove no order execution path was introduced**
+- [ ] **Step 5: Prove no order-execution path was introduced**
 
 ```bash
 grep -RniE "create_order|place_order|new_order|futures_create_order|/order" \
@@ -782,9 +763,9 @@ If a defect was fixed, rerun Steps 1–5 before committing the narrow fix. Do no
 
 **Target:** Railway service `scanner-v6-shadow` only. Do not modify `api`.
 
-- [ ] **Step 1: Confirm current runtime config**
+- [ ] **Step 1: Confirm runtime config**
 
-Require start command:
+Require:
 
 ```text
 python -u auto_scanner_v6.py --interval 5 --limit 80
@@ -800,17 +781,17 @@ REZ_ANALYSIS_VERSION=REZ_V1
 REZ_WATCH_TTL_HOURS=12
 ```
 
-Do not change `SETUP_MIN_SCORE`, structure/R:R values, `TRADING_MODE`, or `DIRECT_AI_ORDER_ENABLED`.
+Do not change score, structure/R:R, trading mode, or direct-order flags.
 
-- [ ] **Step 3: Deploy scanner service only**
+- [ ] **Step 3: Deploy scanner only and verify SUCCESS**
 
-Confirm a fresh deployment reaches `SUCCESS`; config write alone is not proof.
+A config write is not proof; confirm a fresh deployment reaches `SUCCESS`.
 
 - [ ] **Step 4: Verify fresh runtime evidence**
 
-Require: start command still `--limit 80`; provider locks normally; scan cycles continue; no REZ gating logs while disabled; Shadow evaluation continues; `/data` remains mounted.
+Require: `--limit 80`; provider lock healthy; scan cycles continue; no REZ gating while disabled; Shadow evaluation continues; `/data` mounted.
 
-- [ ] **Step 5: Run external connectivity healthcheck**
+- [ ] **Step 5: Run external healthcheck**
 
 ```bash
 python external_healthcheck.py
@@ -825,11 +806,11 @@ TELEGRAM_CHAT=OK
 HEALTHCHECK=OK
 ```
 
-`TELEGRAM_SEND=SKIPPED` is acceptable here.
+`TELEGRAM_SEND=SKIPPED` is acceptable.
 
-- [ ] **Step 6: Record Phase A evidence**
+- [ ] **Step 6: Record evidence**
 
-Record deployment id, full test command/result, first successful scan timestamp, and healthcheck output in the handoff/PR description. Do not claim completion without this fresh evidence.
+Record deployment id, full test result, first successful scan timestamp, and healthcheck output. Do not claim Phase A complete without this fresh evidence.
 
 ---
 
@@ -841,11 +822,6 @@ Record deployment id, full test command/result, first successful scan timestamp,
 
 ```text
 REZ_ANALYSIS_ENABLED=true
-```
-
-Keep:
-
-```text
 SETUP_MIN_SCORE=75
 TRADING_MODE=SIMULATION
 DIRECT_AI_ORDER_ENABLED=false
@@ -857,27 +833,27 @@ Confirm a fresh scanner deployment reaches `SUCCESS`.
 
 - [ ] **Step 3: Inspect at least two fresh scan cycles**
 
-Require compact summary:
+Require:
 
 ```text
 REZ: pass=N wait=N reject=N expired=N promoted=N
 ```
 
-and deterministic candidate state logs such as:
+and deterministic state logs such as:
 
 ```text
 REZUSDT: 1H=PULLBACK 15m=NO_TRIGGER -> WAIT_ANALYSIS
 ```
 
-No immediate PASS signal is required; zero signals is valid if deterministic gates do not pass.
+Zero immediate signals is valid if gates do not pass.
 
 - [ ] **Step 4: Verify WAIT does not invoke Astra**
 
-For at least one WAIT candidate, confirm there is no subsequent `Requesting Devil's Advocate AI review` for the same candidate in that cycle.
+For at least one WAIT candidate, confirm there is no subsequent `Requesting Devil's Advocate AI review` for that candidate in the same cycle.
 
 - [ ] **Step 5: Verify PASS behavior only when naturally observed**
 
-If a PASS occurs, verify Setup Score still runs after REZ and Astra only runs at score `>=75`. If no PASS occurs, rely on automated integration tests for path verification; do not manufacture a production trade.
+If PASS occurs, verify Setup Score runs after REZ and Astra only at score `>=75`. If no PASS occurs, use automated integration tests as path evidence and keep collecting watches; do not manufacture a production trade.
 
 - [ ] **Step 6: Generate initial report without tuning**
 
