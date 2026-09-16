@@ -61,6 +61,19 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
             f"provider_mismatch={shadow_stats['provider_mismatch']}"
         )
 
+    rez_store = None
+    rez_counts = {"pass": 0, "wait": 0, "reject": 0, "expired": 0, "promoted": 0}
+    if REZ_ANALYSIS_ENABLED:
+        rez_store = get_rez_watch_store()
+        if rez_store is None:
+            print("[x] REZ persistence unavailable. Fail-closed: skipping this scan cycle.")
+            return recent_signals
+        try:
+            rez_counts["expired"] = int(rez_store.expire_due(int(time.time() * 1000)))
+        except Exception as exc:
+            print(f"[x] REZ expiry/persistence check failed. Fail-closed: {exc}")
+            return recent_signals
+
     tv_symbols = [f"BINANCE:{s}.P" for s in target_symbols]
 
     try:
@@ -167,6 +180,69 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
             print(f"  [x] {symbol}: structure/ATR/R:R gate rejected setup")
             continue
 
+        rez_result = None
+        rez_record = None
+        if REZ_ANALYSIS_ENABLED:
+            try:
+                candles_15m = market_session.provider.get_klines(symbol, "15m", STRUCTURE_KLINE_LIMIT)
+                rez_result = analyze_rez_candidate(
+                    side=side,
+                    candles_1h=candles_1h,
+                    candles_15m=candles_15m,
+                    atr_period=STRUCTURE_ATR_PERIOD,
+                    atr_buffer_mult=STRUCTURE_ATR_BUFFER_MULT,
+                    swing_window=STRUCTURE_SWING_WINDOW,
+                    analysis_version=REZ_ANALYSIS_VERSION,
+                )
+            except Exception as exc:
+                rez_counts["reject"] += 1
+                print(f"  [x] {symbol}: REZ analysis failed -> REJECT_ANALYSIS ({exc})")
+                continue
+
+            has_watch_anchor = (
+                rez_result.protected_swing_timestamp is not None
+                and rez_result.trigger_level_kind is not None
+                and rez_result.trigger_level_price is not None
+            )
+            if rez_result.state == "REJECT" and not has_watch_anchor:
+                rez_counts["reject"] += 1
+                print(f"  [x] {symbol}: REZ {rez_result.reason} -> REJECT_ANALYSIS")
+                continue
+            if not has_watch_anchor:
+                rez_counts["reject"] += 1
+                print(f"  [x] {symbol}: REZ missing deterministic watch anchor -> REJECT_ANALYSIS")
+                continue
+
+            try:
+                rez_record = rez_store.record_analysis(
+                    symbol=symbol,
+                    side=side,
+                    provider=provider_name,
+                    result=rez_result,
+                    now_ms=int(time.time() * 1000),
+                    ttl_hours=REZ_WATCH_TTL_HOURS,
+                )
+            except Exception as exc:
+                rez_counts["reject"] += 1
+                print(f"  [x] {symbol}: REZ persistence failed -> REJECT_ANALYSIS ({exc})")
+                continue
+
+            if rez_result.state == "WAIT":
+                rez_counts["wait"] += 1
+                print(
+                    f"  ⏳ {symbol}: REZ 1H={rez_result.structure_1h} "
+                    f"15m={rez_result.trigger_15m} -> WAIT_ANALYSIS"
+                )
+                continue
+            if rez_result.state != "PASS":
+                rez_counts["reject"] += 1
+                print(f"  [x] {symbol}: REZ {rez_result.reason} -> REJECT_ANALYSIS")
+                continue
+
+            rez_counts["pass"] += 1
+            if rez_record.promoted:
+                rez_counts["promoted"] += 1
+
         setup_score_result = score_setup(
             side=side,
             r4=r4,
@@ -199,6 +275,13 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
         except Exception as exc:
             print(f"  [x] {symbol}: shadow snapshot persistence failed -> REJECT ({exc})")
             continue
+
+        if REZ_ANALYSIS_ENABLED and rez_record is not None:
+            try:
+                rez_store.link_event_snapshot(rez_record.event_id, shadow_snapshot_id)
+            except Exception as exc:
+                print(f"  [x] {symbol}: REZ/Shadow snapshot link failed -> REJECT_ANALYSIS ({exc})")
+                continue
 
         if not score_passes_threshold(setup_score_result, SETUP_MIN_SCORE):
             score_value = setup_score_result.get("score", 0) if isinstance(setup_score_result, dict) else 0
