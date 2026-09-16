@@ -145,6 +145,122 @@
     return recent_signals
 
 
+_structure_trade_plan_core = build_structure_trade_plan
+
+
+def _classify_structure_reject_reason(
+    side,
+    entry_price,
+    candles_1h,
+    candles_4h=None,
+    pivot_levels=None,
+    min_rr=1.5,
+    atr_period=14,
+    atr_buffer_mult=0.25,
+    swing_window=2,
+):
+    """Classify why the unchanged structure core returned None; telemetry only."""
+    try:
+        side = str(side).upper()
+        if side not in {"LONG", "SHORT"} or entry_price is None or entry_price <= 0:
+            return "INVALID_INPUT"
+        if min_rr <= 0 or atr_buffer_mult < 0:
+            return "INVALID_PARAMETERS"
+
+        candles_4h = candles_4h or []
+        pivot_levels = pivot_levels or []
+        atr = calculate_atr(candles_1h, period=atr_period)
+        if atr is None or atr <= 0:
+            return "ATR_INVALID"
+
+        swings_1h = find_confirmed_swings(candles_1h, window=swing_window)
+        swings_4h = (
+            find_confirmed_swings(candles_4h, window=swing_window)
+            if candles_4h else {"highs": [], "lows": []}
+        )
+        buffer_dist = atr * atr_buffer_mult
+
+        if side == "LONG":
+            stop_candidates = [s for s in swings_1h["lows"] if s["price"] < entry_price]
+            if not stop_candidates:
+                return "NO_PROTECTED_SWING"
+            structure_stop = stop_candidates[-1]["price"]
+            sl = structure_stop - buffer_dist
+            if sl >= entry_price:
+                return "SL_INVALID"
+            target_levels = [s["price"] for s in swings_1h["highs"] if s["price"] > entry_price]
+            target_levels += [s["price"] for s in swings_4h["highs"] if s["price"] > entry_price]
+            target_levels += [float(v) for v in pivot_levels if v is not None and float(v) > entry_price]
+        else:
+            stop_candidates = [s for s in swings_1h["highs"] if s["price"] > entry_price]
+            if not stop_candidates:
+                return "NO_PROTECTED_SWING"
+            structure_stop = stop_candidates[-1]["price"]
+            sl = structure_stop + buffer_dist
+            if sl <= entry_price:
+                return "SL_INVALID"
+            target_levels = [s["price"] for s in swings_1h["lows"] if s["price"] < entry_price]
+            target_levels += [s["price"] for s in swings_4h["lows"] if s["price"] < entry_price]
+            target_levels += [float(v) for v in pivot_levels if v is not None and float(v) < entry_price]
+
+        risk_dist = abs(entry_price - sl)
+        if risk_dist <= 0:
+            return "RISK_INVALID"
+
+        tolerance = max(entry_price * 0.0001, atr * 0.05)
+        targets = _dedupe_levels(target_levels, tolerance)
+        if side == "SHORT":
+            targets = list(reversed(targets))
+        if not targets:
+            return "NO_TARGET"
+
+        rr_tp1 = abs(targets[0] - entry_price) / risk_dist
+        if rr_tp1 < min_rr:
+            return "RR_TOO_LOW"
+        return "UNKNOWN_STRUCTURE_REJECT"
+    except Exception:
+        return "DIAGNOSTIC_ERROR"
+
+
+def build_structure_trade_plan(
+    side,
+    entry_price,
+    candles_1h,
+    candles_4h=None,
+    pivot_levels=None,
+    min_rr=1.5,
+    atr_period=14,
+    atr_buffer_mult=0.25,
+    swing_window=2,
+    diagnostics=None,
+):
+    """Call the unchanged structure core and attach observation-only diagnostics."""
+    result = _structure_trade_plan_core(
+        side=side,
+        entry_price=entry_price,
+        candles_1h=candles_1h,
+        candles_4h=candles_4h,
+        pivot_levels=pivot_levels,
+        min_rr=min_rr,
+        atr_period=atr_period,
+        atr_buffer_mult=atr_buffer_mult,
+        swing_window=swing_window,
+    )
+    if result is None and diagnostics is not None:
+        diagnostics["reason"] = _classify_structure_reject_reason(
+            side=side,
+            entry_price=entry_price,
+            candles_1h=candles_1h,
+            candles_4h=candles_4h,
+            pivot_levels=pivot_levels,
+            min_rr=min_rr,
+            atr_period=atr_period,
+            atr_buffer_mult=atr_buffer_mult,
+            swing_window=swing_window,
+        )
+    return result
+
+
 _run_scan_cycle_without_telemetry = run_scan_cycle
 
 
@@ -164,6 +280,7 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
         "astra_called": 0,
         "alerts_sent": 0,
     }
+    structure_reject_counts = {}
     score_attempts = 0
     rez_wait_results = 0
     btc_basis_calls = 0
@@ -203,9 +320,16 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
         return result
 
     def counted_build_structure_trade_plan(*args, **kwargs):
+        diagnostics = kwargs.get("diagnostics")
+        if diagnostics is None:
+            diagnostics = {}
+            kwargs["diagnostics"] = diagnostics
         result = original_build_structure_trade_plan(*args, **kwargs)
         if result:
             counters["structure_passed"] += 1
+        else:
+            reason = str(diagnostics.get("reason") or "UNKNOWN_STRUCTURE_REJECT")
+            structure_reject_counts[reason] = structure_reject_counts.get(reason, 0) + 1
         return result
 
     def counted_analyze_rez_candidate(*args, **kwargs):
@@ -267,6 +391,13 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
                 0,
                 counters["rez_entered"] - counters["rez_pass"] - counters["rez_wait"],
             )
+
+        if structure_reject_counts:
+            reason_summary = " ".join(
+                f"{reason}={structure_reject_counts[reason]}"
+                for reason in sorted(structure_reject_counts)
+            )
+            print(f"[*] STRUCTURE_REJECTS: {reason_summary}")
 
         print(
             "[*] TELEMETRY: "
