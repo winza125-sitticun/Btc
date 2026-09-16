@@ -12,7 +12,16 @@
                 "data_provider": provider_name,
                 "shadow_snapshot_id": shadow_snapshot_id,
                 "shadow_inserted": shadow_inserted,
+                "rez_result": rez_result,
+                "rez_event_id": None if rez_record is None else rez_record.event_id,
             }
+        )
+
+    if REZ_ANALYSIS_ENABLED:
+        print(
+            f"[*] REZ: pass={rez_counts['pass']} wait={rez_counts['wait']} "
+            f"reject={rez_counts['reject']} expired={rez_counts['expired']} "
+            f"promoted={rez_counts['promoted']}"
         )
 
     print(f"\n[*] Setup Score Gate Passed (>= {SETUP_MIN_SCORE}): {len(qualified_setups)} setups.")
