@@ -102,6 +102,22 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
     return parsed
 
 
+def rez_prompt_text(rez_result: Optional[RezAnalysisResult]) -> str:
+    """Render compact deterministic REZ metadata for Astra; never includes raw candles."""
+    if rez_result is None:
+        return "REZ Analysis: DISABLED"
+    support = ",".join(sorted(str(value) for value in rez_result.supporting_triggers)) or "NONE"
+    return "\n".join(
+        [
+            f"REZ Analysis: {rez_result.analysis_version}",
+            f"1H Structure: {rez_result.structure_1h}",
+            f"15m Trigger: {rez_result.trigger_15m}",
+            f"Supporting Triggers: {support}",
+            f"REZ Reason: {rez_result.reason}",
+        ]
+    )
+
+
 def analyze_with_ai(
     symbol: str,
     side: str,
@@ -116,6 +132,7 @@ def analyze_with_ai(
     tags: list[str],
     plan: Optional[Dict[str, Any]] = None,
     setup_score: Optional[Dict[str, Any]] = None,
+    rez_result: Optional[RezAnalysisResult] = None,
 ) -> Dict[str, Any]:
     """Devil's Advocate only. AI outage or malformed output rejects the setup."""
     if not GEMINI_API_KEY:
@@ -138,6 +155,7 @@ def analyze_with_ai(
         )
         setup_score = setup_score or {}
         score_text = f"{setup_score.get('score', 'N/A')}/100 | components={setup_score.get('components', {})}"
+        rez_text = rez_prompt_text(rez_result)
         prompt = f"""
 คุณเป็น Risk Manager ของกองทุนเทรด Crypto Futures และทำหน้าที่ Devil's Advocate เท่านั้น
 ห้ามสร้างสัญญาณใหม่ หน้าที่คือจับความเสี่ยงของ setup ที่ผ่าน deterministic filters มาแล้ว
@@ -152,6 +170,7 @@ def analyze_with_ai(
 - จุดสังเกต: {', '.join(tags)}
 - Structure Plan: {structure_text}
 - Deterministic Setup Score: {score_text}
+- REZ Context:\n{rez_text}
 
 คำตัดสิน:
 - APPROVED = setup ยังแข็งแรงและไม่มีความเสี่ยงใหม่ที่ควรหยุด
