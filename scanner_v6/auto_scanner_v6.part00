@@ -9,6 +9,8 @@ import requests
 
 from setup_score_v6 import score_passes_threshold, score_setup
 from shadow_eval_v6 import ShadowStore, evaluate_snapshot
+from rez_analysis_v1 import RezAnalysisResult, analyze_rez_candidate
+from rez_watch_v1 import RezWatchStore
 
 from market_data_v6 import (
     BinanceMarketDataProvider,
@@ -47,9 +49,14 @@ SHADOW_SETUP_COOLDOWN_SECONDS = int(os.getenv("SHADOW_SETUP_COOLDOWN_SECONDS", "
 SHADOW_EVAL_KLINE_LIMIT = int(os.getenv("SHADOW_EVAL_KLINE_LIMIT", "240"))
 SHADOW_MIN_TOTAL_SAMPLES = int(os.getenv("SHADOW_MIN_TOTAL_SAMPLES", "100"))
 SHADOW_MIN_BUCKET_SAMPLES = int(os.getenv("SHADOW_MIN_BUCKET_SAMPLES", "30"))
+REZ_ANALYSIS_ENABLED = os.getenv("REZ_ANALYSIS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+REZ_ANALYSIS_VERSION = os.getenv("REZ_ANALYSIS_VERSION", "REZ_V1").strip() or "REZ_V1"
+REZ_WATCH_TTL_HOURS = int(os.getenv("REZ_WATCH_TTL_HOURS", "12"))
 
 _SHADOW_STORE = None
 _SHADOW_STORE_FAILED = False
+_REZ_WATCH_STORE = None
+_REZ_WATCH_STORE_FAILED = False
 
 BUY_RECS = {"BUY", "STRONG_BUY"}
 SELL_RECS = {"SELL", "STRONG_SELL"}
@@ -108,6 +115,24 @@ def get_shadow_store() -> Optional[ShadowStore]:
     except Exception as exc:
         _SHADOW_STORE_FAILED = True
         print(f"[x] Shadow DB unavailable. Fail-closed: {exc}")
+        return None
+
+
+def get_rez_watch_store() -> Optional[RezWatchStore]:
+    """Lazily initialize REZ watch storage only when the feature is enabled."""
+    global _REZ_WATCH_STORE, _REZ_WATCH_STORE_FAILED
+    if not REZ_ANALYSIS_ENABLED:
+        return None
+    if _REZ_WATCH_STORE_FAILED:
+        return None
+    if _REZ_WATCH_STORE is not None:
+        return _REZ_WATCH_STORE
+    try:
+        _REZ_WATCH_STORE = RezWatchStore(SHADOW_DB_PATH)
+        return _REZ_WATCH_STORE
+    except Exception as exc:
+        _REZ_WATCH_STORE_FAILED = True
+        print(f"[x] REZ watch DB unavailable. Fail-closed: {exc}")
         return None
 
 
@@ -216,5 +241,4 @@ def _valid_candle(candle: Dict[str, Any]) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     return high >= low and low <= close <= high
-
 
